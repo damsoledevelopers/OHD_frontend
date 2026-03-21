@@ -3,8 +3,20 @@ import axios from 'axios';
 /** Sync with login/signup storage — required when API is on another origin (e.g. Render) and cookies are unreliable. */
 export const AUTH_TOKEN_STORAGE_KEY = 'ohd_auth_token';
 
+function trimTrailingSlash(s: string): string {
+  return s.replace(/\/$/, '');
+}
+
+/**
+ * Backend REST root including `/api`, from `NEXT_PUBLIC_API_URL` in `.env`.
+ * Example: `http://localhost:5000/api` → requests like `POST …/companies/share-registration-link`.
+ */
+export const API_BASE_URL = trimTrailingSlash(
+  (process.env.NEXT_PUBLIC_API_URL || 'https://ohd.onrender.com/api').trim()
+);
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'https://ohd.onrender.com/api',
+  baseURL: API_BASE_URL,
   withCredentials: true,
 });
 

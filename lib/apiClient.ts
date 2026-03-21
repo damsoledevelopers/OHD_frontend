@@ -1,4 +1,4 @@
-import api from './api';
+import api, { API_BASE_URL } from './api';
 
 // Public (no auth) — app config from backend .env
 export const publicAPI = {
@@ -107,11 +107,15 @@ export const mailAPI = {
     companyId: string;
     notes?: string;
   }) => api.post('/mail/bulk', data),
+  /** Base URL from `NEXT_PUBLIC_API_URL` (exported as `API_BASE_URL` in `./api`). */
   sendCompanyFormLink: (data: {
     subject: string;
     notes?: string;
     recipientEmail: string;
-  }) => api.post('/companies/share-registration-link', data),
+  }) =>
+    api.post('/companies/share-registration-link', data, {
+      baseURL: API_BASE_URL,
+    }),
   getLogs: (params?: Record<string, string | number | boolean | undefined>) =>
     api.get('/mail/logs', { params }),
 };
