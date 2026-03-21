@@ -48,6 +48,11 @@ function normalizeRecipientList(emails: string[]): string[] {
   return out;
 }
 
+/** When API config has no base, use Frontend `.env` (admin UI may run on another port than :3000). */
+function getPublicAppBaseUrlFromEnv(): string {
+  return (process.env.NEXT_PUBLIC_PUBLIC_APP_BASE_URL || '').trim().replace(/\/$/, '');
+}
+
 /** Participant survey entry is always `/survey/start` on the public app host. */
 function buildPublicSurveyStartUrl(publicAppBaseUrl: string, companyId: string): string {
   const trimmed = publicAppBaseUrl.trim().replace(/\/$/, '');
@@ -335,7 +340,7 @@ export default function CompaniesPage() {
   const handleCopyFormLink = async () => {
     if (!publicAppBaseUrl) {
       toast.error(
-        'Company form URL is not configured. Set `PUBLIC_APP_BASE_URL` in the backend `.env` (participant app origin).'
+        'Company form URL is not configured. Set `PUBLIC_APP_BASE_URL` in Backend `.env` or `NEXT_PUBLIC_PUBLIC_APP_BASE_URL` in Frontend `.env` (participant app origin, e.g. http://localhost:3000).'
       );
       return;
     }
@@ -470,7 +475,7 @@ export default function CompaniesPage() {
     if (!selectedCompanyId) return;
     if (!publicAppBaseUrl) {
       toast.error(
-        'Survey link is not configured. Set `PUBLIC_APP_BASE_URL` in the backend `.env` (participant app origin).'
+        'Survey link is not configured. Set `PUBLIC_APP_BASE_URL` in Backend `.env` or `NEXT_PUBLIC_PUBLIC_APP_BASE_URL` in Frontend `.env` (participant app origin; survey path is /survey/start).'
       );
       return;
     }
