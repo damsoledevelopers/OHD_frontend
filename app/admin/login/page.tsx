@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import { useState } from 'react';
 import { authAPI } from '@/lib/apiClient';
+import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
@@ -19,10 +20,12 @@ export default function LoginPage() {
       const response = await authAPI.login({ email, password });
       console.log('Login response:', response.data);
       
-      // Store token in localStorage as fallback for cross-domain
-      if (response.data.user) {
-        localStorage.setItem('user', JSON.stringify(response.data.user));
-        console.log('User stored in localStorage');
+      const data = response.data as { token?: string; user?: unknown };
+      if (data.token) {
+        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+      }
+      if (data.user) {
+        localStorage.setItem('user', JSON.stringify(data.user));
       }
       
       toast.success('Login successful!');
@@ -94,13 +97,6 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
-
-        <p className="text-center mt-6 text-sm text-gray-500">
-          Need a new account?{' '}
-          <a href="/admin/signup" className="text-primary-600 hover:text-primary-700 font-bold">
-            Create an admin
-          </a>
-        </p>
       </div>
     </div>
   );

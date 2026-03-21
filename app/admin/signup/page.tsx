@@ -2,8 +2,8 @@
 
 import Image from 'next/image';
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { authAPI } from '@/lib/apiClient';
+import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 export default function SignupPage() {
@@ -11,7 +11,6 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,10 +28,16 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      await authAPI.signup({ email, password });
+      const response = await authAPI.signup({ email, password });
+      const data = response.data as { token?: string; user?: unknown };
+      if (data.token) {
+        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+      }
+      if (data.user) {
+        localStorage.setItem('user', JSON.stringify(data.user));
+      }
       toast.success('Account created successfully!');
-      router.push('/admin');
-      router.push('/admin');
+      window.location.replace('/admin');
     } catch (error: unknown) {
       console.error('Signup error:', error);
       const message = error instanceof Error ? error.message : 'Signup failed';

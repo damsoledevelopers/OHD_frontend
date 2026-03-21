@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import AdminLayout from '@/components/AdminLayout';
 import { companyAPI, reportAPI } from '@/lib/apiClient';
+import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/api';
 import toast from 'react-hot-toast';
 import {
   BarChart,
@@ -41,9 +42,10 @@ export default function AdminDashboard() {
   >([]);
 
   useEffect(() => {
-    // Check authentication client-side for cross-domain scenarios
-    const user = localStorage.getItem('user');
-    if (!user) {
+    const hasSession =
+      typeof window !== 'undefined' &&
+      (localStorage.getItem('user') || localStorage.getItem(AUTH_TOKEN_STORAGE_KEY));
+    if (!hasSession) {
       window.location.href = '/admin/login';
       return;
     }

@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { authAPI } from '@/lib/apiClient';
+import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { 
   LayoutDashboard, 
@@ -31,6 +32,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const handleLogout = async () => {
     try {
       await authAPI.logout();
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        localStorage.removeItem('user');
+      }
       toast.success('Logged out successfully');
       router.push('/admin/login');
     } catch (error: unknown) {
