@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import AdminLayout from '@/components/AdminLayout';
 import { companyAPI, responseAPI } from '@/lib/apiClient';
@@ -69,7 +70,7 @@ export default function CompanyDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
 
-  const fetchResponses = async () => {
+  const fetchResponses = useCallback(async () => {
     if (!companyId) return;
     try {
       setLoadingResponses(true);
@@ -82,13 +83,13 @@ export default function CompanyDetailPage() {
     } finally {
       setLoadingResponses(false);
     }
-  };
+  }, [companyId]);
 
   useEffect(() => {
     if (activeTab === 'response' && companyId) {
-      fetchResponses();
+      void fetchResponses();
     }
-  }, [activeTab, companyId]);
+  }, [activeTab, companyId, fetchResponses]);
 
   const handleDelete = async () => {
     if (!companyId) return;
@@ -150,7 +151,7 @@ export default function CompanyDetailPage() {
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-start gap-6">
-          <img
+          <Image
             src="/ohdlogo.png"
             alt="OHD Logo"
             width={72}

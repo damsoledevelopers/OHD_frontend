@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { Suspense, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import AdminLayout from '@/components/AdminLayout';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -87,7 +87,7 @@ interface CompanySummary {
 
 const PIE_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#f97316', '#ef4444'];
 
-export default function ReportsPage() {
+function ReportsPageContent() {
   const searchParams = useSearchParams();
   const initialCompanyId = searchParams.get('companyId') || '';
   const openedFromCompanyAnalytics = useRef(!!initialCompanyId);
@@ -240,7 +240,8 @@ export default function ReportsPage() {
       );
     }
     const pillar = questionPillars.find((p) => p._id === selectedPillarId);
-    return (pillar?.sections || []).map((s) => ({
+    if (!pillar) return [];
+    return (pillar.sections || []).map((s) => ({
       ...s,
       pillarName: pillar.name,
     }));
@@ -815,5 +816,21 @@ export default function ReportsPage() {
         )}
       </div>
     </AdminLayout>
+  );
+}
+
+export default function ReportsPage() {
+  return (
+    <Suspense
+      fallback={
+        <AdminLayout>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">Loading reports…</p>
+          </div>
+        </AdminLayout>
+      }
+    >
+      <ReportsPageContent />
+    </Suspense>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { authAPI } from '@/lib/apiClient';
@@ -46,7 +47,7 @@ export default function SignupPage() {
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <div className="mx-auto h-20 w-20 bg-white rounded-xl flex items-center justify-center shadow-sm border border-gray-100 mb-4 p-3">
-            <img src="/ohdlogo.png" alt="OHD Logo" width={60} height={60} className="w-full h-full object-contain" />
+            <Image src="/ohdlogo.png" alt="OHD Logo" width={60} height={60} className="w-full h-full object-contain" />
           </div>
           <h2 className="text-2xl font-bold text-gray-900">Admin Signup</h2>
           <p className="text-gray-500 text-sm mt-1">Create a new administrator account.</p>

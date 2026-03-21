@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import AdminLayout from '@/components/AdminLayout';
-import { companyAPI, sectionAPI, questionAPI, responseAPI } from '@/lib/apiClient';
+import { companyAPI, questionPaperAPI, responseAPI } from '@/lib/apiClient';
 import toast from 'react-hot-toast';
 
 interface Company {
@@ -19,9 +19,23 @@ interface Section {
 interface Question {
   _id: string;
   text: string;
-  sectionId: string | Section;
+  sectionId: string;
   order: number;
 }
+
+type PublishedQuestion = { _id: string; text: string; order?: number };
+type PublishedSection = {
+  _id: string;
+  name: string;
+  order?: number;
+  questions?: PublishedQuestion[];
+};
+type PublishedPillar = {
+  _id: string;
+  name: string;
+  order?: number;
+  sections?: PublishedSection[];
+};
 
 type Rating = 'A' | 'B' | 'C' | 'D' | 'E';
 
@@ -46,14 +60,52 @@ export default function FillFormPage() {
 
   const fetchMeta = async () => {
     try {
-      const [companyRes, sectionRes, questionRes] = await Promise.all([
+      const [companyRes, paperRes] = await Promise.all([
         companyAPI.getAll(),
-        sectionAPI.getAll(),
-        questionAPI.getAll(),
+        questionPaperAPI.getPublished(),
       ]);
       setCompanies(companyRes.data.companies || []);
-      setSections(sectionRes.data.sections || []);
-      setQuestions(questionRes.data.questions || []);
+
+      const pillars: PublishedPillar[] = paperRes.data?.pillars || [];
+      const sortedPillars = [...pillars].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0),
+      );
+
+      const nextSections: Section[] = [];
+      const nextQuestions: Question[] = [];
+      let sectionDisplayOrder = 0;
+
+      for (const pillar of sortedPillars) {
+        const pillarSections = [...(pillar.sections || [])].sort(
+          (a, b) => (a.order ?? 0) - (b.order ?? 0),
+        );
+        for (const sec of pillarSections) {
+          sectionDisplayOrder += 1;
+          const label =
+            pillar.name && sec.name
+              ? `${pillar.name}: ${sec.name}`
+              : sec.name || 'Section';
+          nextSections.push({
+            _id: sec._id,
+            name: label,
+            order: sectionDisplayOrder,
+          });
+          const qs = [...(sec.questions || [])].sort(
+            (a, b) => (a.order ?? 0) - (b.order ?? 0),
+          );
+          for (const q of qs) {
+            nextQuestions.push({
+              _id: q._id,
+              text: q.text,
+              sectionId: sec._id,
+              order: q.order ?? 0,
+            });
+          }
+        }
+      }
+
+      setSections(nextSections);
+      setQuestions(nextQuestions);
     } catch (error: unknown) {
       console.error('Failed to load form data', error);
       const message = error instanceof Error ? error.message : 'Failed to load form data';
@@ -71,10 +123,7 @@ export default function FillFormPage() {
     .map((section) => ({
       section,
       questions: questions
-        .filter((q) => {
-          const sid = typeof q.sectionId === 'string' ? q.sectionId : q.sectionId._id;
-          return sid === section._id;
-        })
+        .filter((q) => q.sectionId === section._id)
         .sort((a, b) => a.order - b.order),
     }));
 
@@ -107,6 +156,7 @@ export default function FillFormPage() {
         companyId: selectedCompany,
         service: selectedService,
         answers: filledAnswers,
+        startedAt: Date.now(),
       });
       toast.success('Response submitted');
       setAnswers({});

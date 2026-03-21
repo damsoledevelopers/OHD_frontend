@@ -70,12 +70,24 @@ export const reportAPI = {
   },
 };
 
+/** Payload shape accepted by PUT /question-paper/draft (IDs are server-generated). */
+export type QuestionPaperDraftPillar = {
+  name: string;
+  order?: number;
+  sections?: Array<{
+    name: string;
+    order?: number;
+    questions?: Array<{ text: string; order?: number }>;
+  }>;
+};
+
 // Question paper APIs (pillars/sections/questions structure)
 // Admin draft endpoints live under `/api/question-paper/draft` on the backend.
 // Published structure is exposed at `/api/question-paper/published`.
 export const questionPaperAPI = {
   getDraft: () => api.get('/question-paper/draft'),
-  saveDraft: (data: { pillars: any[] }) => api.put('/question-paper/draft', data),
+  saveDraft: (data: { pillars: QuestionPaperDraftPillar[] }) =>
+    api.put('/question-paper/draft', data),
   publish: () => api.post('/question-paper/publish', {}),
   getPublished: () => api.get('/question-paper/published'),
 };
@@ -88,12 +100,19 @@ export const exportAPI = {
 
 // Mail APIs
 export const mailAPI = {
-  sendBulk: (data: any) => api.post('/mail/bulk', data),
+  sendBulk: (data: {
+    subject: string;
+    surveyLink: string;
+    recipients: string[];
+    companyId: string;
+    notes?: string;
+  }) => api.post('/mail/bulk', data),
   sendCompanyFormLink: (data: {
     subject: string;
     notes?: string;
     recipientEmail: string;
   }) => api.post('/companies/share-registration-link', data),
-  getLogs: (params?: any) => api.get('/mail/logs', { params }),
+  getLogs: (params?: Record<string, string | number | boolean | undefined>) =>
+    api.get('/mail/logs', { params }),
 };
 

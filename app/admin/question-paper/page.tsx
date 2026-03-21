@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import AdminLayout from '@/components/AdminLayout';
 import toast from 'react-hot-toast';
@@ -21,6 +22,23 @@ interface Pillar {
   id: number;
   name: string;
   sections: Section[];
+}
+
+interface RemoteQuestion {
+  text: string;
+  order?: number;
+}
+
+interface RemoteSection {
+  name: string;
+  order?: number;
+  questions?: RemoteQuestion[];
+}
+
+interface RemotePillar {
+  name: string;
+  order?: number;
+  sections?: RemoteSection[];
 }
 
 export default function QuestionPaperPage() {
@@ -46,18 +64,18 @@ export default function QuestionPaperPage() {
       try {
         setLoading(true);
         const res = await questionPaperAPI.getDraft();
-        const remotePillars = res.data?.pillars || [];
+        const remotePillars: RemotePillar[] = res.data?.pillars || [];
 
         let counter = 1;
         const mapId = () => counter++;
 
-        const mappedPillars: Pillar[] = remotePillars.map((p: any) => ({
+        const mappedPillars: Pillar[] = remotePillars.map((p) => ({
           id: mapId(),
           name: p.name,
-          sections: (p.sections || []).map((s: any) => ({
+          sections: (p.sections || []).map((s) => ({
             id: mapId(),
             name: s.name,
-            questions: (s.questions || []).map((q: any) => ({
+            questions: (s.questions || []).map((q) => ({
               id: mapId(),
               text: q.text,
             })),
@@ -175,7 +193,7 @@ export default function QuestionPaperPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-start gap-4 min-w-0">
-            <img
+            <Image
               src="/ohdlogo.png"
               alt="OHD Logo"
               width={48}

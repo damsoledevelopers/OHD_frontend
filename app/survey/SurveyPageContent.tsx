@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { companyAPI, responseAPI, questionPaperAPI } from '@/lib/apiClient';
@@ -121,6 +121,22 @@ export default function SurveyPageContent() {
   const handleSubmitRef = useRef<((reason: 'manual' | 'timeout') => Promise<void>) | null>(null);
   /** After questions load, apply section index from persisted session once. */
   const pendingNavRestoreRef = useRef<{ sectionIndex: number } | null>(null);
+
+  const persistSessionUpdate = useCallback(
+    (patch: Record<string, unknown>) => {
+      if (!sessionStorageKey) return;
+      if (typeof window === 'undefined') return;
+      try {
+        const raw = window.localStorage.getItem(sessionStorageKey);
+        const base = raw ? JSON.parse(raw) : {};
+        window.localStorage.setItem(sessionStorageKey, JSON.stringify({ ...base, ...patch }));
+      } catch {
+        // ignore localStorage failures
+      }
+    },
+    [sessionStorageKey],
+  );
+
   useEffect(() => {
     startedRef.current = started;
   }, [started]);
@@ -359,7 +375,7 @@ export default function SurveyPageContent() {
       ratings,
       currentSectionIndex,
     });
-    // deps intentionally omit ratings/indices: this runs once when the paper becomes ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshot initial session; omit ratings/currentSectionIndex
   }, [
     started,
     loadingQuestions,
@@ -369,6 +385,7 @@ export default function SurveyPageContent() {
     timeOver,
     sessionStorageKey,
     department,
+    persistSessionUpdate,
   ]);
 
   // Apply persisted question position once the paper is loaded (back/refresh safe).
@@ -431,18 +448,6 @@ export default function SurveyPageContent() {
     }
   };
 
-  const persistSessionUpdate = (patch: Record<string, unknown>) => {
-    if (!sessionStorageKey) return;
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(sessionStorageKey);
-      const base = raw ? JSON.parse(raw) : {};
-      window.localStorage.setItem(sessionStorageKey, JSON.stringify({ ...base, ...patch }));
-    } catch {
-      // ignore localStorage failures
-    }
-  };
-
   // Persist answers and place in exam so leaving the page does not lose progress or shrink the 30 min window.
   useEffect(() => {
     if (!sessionStorageKey || !started || isSubmitted || timeOver) return;
@@ -459,6 +464,7 @@ export default function SurveyPageContent() {
     started,
     isSubmitted,
     timeOver,
+    persistSessionUpdate,
   ]);
 
   const handleSubmit = async (reason: 'manual' | 'timeout' = 'manual') => {

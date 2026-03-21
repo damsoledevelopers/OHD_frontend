@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { UploadCloud } from 'lucide-react';
 import { useState, useRef } from 'react';
 import { companyAPI } from '@/lib/apiClient';
@@ -18,7 +19,6 @@ export default function CompanyDetailsFormPage() {
   const [excelFileName, setExcelFileName] = useState<string | null>(null);
   const excelInputRef = useRef<HTMLInputElement | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
 
   const handleExcelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -57,7 +57,6 @@ export default function CompanyDetailsFormPage() {
       await companyAPI.submitFromCompany(formData);
 
       toast.success('Company details submitted successfully');
-      setSubmitted(true);
 
       setCompanyName('');
       setEmail('');
@@ -115,7 +114,7 @@ export default function CompanyDetailsFormPage() {
             {/* Centered logo, then title — fields stack below in one column */}
             <header className="shrink-0 border-b border-gray-100 px-4 pb-3 pt-4 text-center sm:px-6 sm:pb-4 sm:pt-5">
               <div className="flex justify-center">
-                <img
+                <Image
                   src="/ohdlogo.png"
                   alt="OHD"
                   width={96}

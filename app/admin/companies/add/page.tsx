@@ -73,13 +73,22 @@ export default function AddCompanyPage() {
           }
           toast.success('Company created');
           router.push('/admin/companies');
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error('Failed to create company', error);
-          const apiMessage =
-            error?.response?.data?.error ||
-            error?.response?.data?.message ||
-            error?.message ||
-            'Failed to create company';
+          let apiMessage = 'Failed to create company';
+          if (error && typeof error === 'object' && 'response' in error) {
+            const ax = error as {
+              response?: { data?: { error?: string; message?: string } };
+              message?: string;
+            };
+            apiMessage =
+              ax.response?.data?.error ||
+              ax.response?.data?.message ||
+              ax.message ||
+              apiMessage;
+          } else if (error instanceof Error) {
+            apiMessage = error.message;
+          }
           toast.error(apiMessage);
         } finally {
           setCreating(false);

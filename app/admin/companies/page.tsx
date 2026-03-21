@@ -115,7 +115,7 @@ export default function CompaniesPage() {
 
   const [fileViewerUrl, setFileViewerUrl] = useState<string | null>(null);
   const [fileViewerTitle, setFileViewerTitle] = useState<string | null>(null);
-  const [fileRawUrl, setFileRawUrl] = useState<string | null>(null);
+  const [fileRawUrl] = useState<string | null>(null);
 
   const [publicAppBaseUrl, setPublicAppBaseUrl] = useState('');
   const [loadingPublicAppBaseUrl, setLoadingPublicAppBaseUrl] = useState(true);
@@ -514,11 +514,6 @@ export default function CompaniesPage() {
     } finally {
       setSendingMail(false);
     }
-  };
-
-  const openExcelViewer = () => {
-    // Excel viewing disabled for now
-    return;
   };
 
   return (
