@@ -179,10 +179,21 @@ export default function CompaniesPage() {
     filteredCompanies.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endIndex = Math.min(filteredCompanies.length, currentPage * pageSize);
 
-  // PUBLIC_APP_BASE_URL = participant Next app origin (company form + /survey/start emails).
-  // PUBLIC_SURVEY_BASE_URL is the question-paper URL only (see /api/public/config questionPaperBaseUrl).
+  // Backend PUBLIC_APP_BASE_URL → /api/public/config; NEXT_PUBLIC_PUBLIC_APP_BASE_URL is fallback.
+  // PUBLIC_SURVEY_BASE_URL is the question-paper URL only (see questionPaperBaseUrl).
   useEffect(() => {
     let cancelled = false;
+
+    const applyFallbackBase = () => {
+      const fromEnv = getPublicAppBaseUrlFromEnv();
+      if (fromEnv) {
+        setPublicAppBaseUrl(fromEnv);
+        return;
+      }
+      if (typeof window !== 'undefined') {
+        setPublicAppBaseUrl(window.location.origin);
+      }
+    };
 
     const loadConfig = async () => {
       try {
@@ -197,14 +208,10 @@ export default function CompaniesPage() {
           return;
         }
 
-        if (typeof window !== 'undefined') {
-          setPublicAppBaseUrl(window.location.origin);
-        }
+        applyFallbackBase();
       } catch (e) {
         console.error('Failed to load public app base URL', e);
-        if (typeof window !== 'undefined') {
-          setPublicAppBaseUrl(window.location.origin);
-        }
+        applyFallbackBase();
       } finally {
         if (!cancelled) setLoadingPublicAppBaseUrl(false);
       }
