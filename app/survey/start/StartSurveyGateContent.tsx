@@ -22,10 +22,17 @@ type GateState =
 export default function StartSurveyGateContent() {
   const searchParams = useSearchParams();
   const companyId = searchParams.get('companyId') || '';
+  const employeeEmail = searchParams.get('employeeEmail') || '';
 
   const [gate, setGate] = useState<GateState>({ kind: 'loading' });
 
-  const surveyHref = useMemo(() => (companyId ? `/survey?companyId=${encodeURIComponent(companyId)}` : '/survey'), [companyId]);
+  const surveyHref = useMemo(() => {
+    if (!companyId) return '/survey';
+    const params = new URLSearchParams();
+    params.set('companyId', companyId);
+    if (employeeEmail) params.set('employeeEmail', employeeEmail);
+    return `/survey?${params.toString()}`;
+  }, [companyId, employeeEmail]);
 
   useEffect(() => {
     if (!companyId) {

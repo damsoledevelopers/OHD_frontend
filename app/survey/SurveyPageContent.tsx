@@ -48,20 +48,6 @@ interface Company {
 
 const TOTAL_TIME_SECONDS = 30 * 60; // 30 minutes
 
-const DEPARTMENTS = [
-  'Engineering',
-  'Marketing',
-  'Sales',
-  'Human Resources',
-  'Operations',
-  'Finance',
-  'Product',
-  'Customer Support',
-  'Design',
-  'Legal',
-  'Other',
-];
-
 const numericToLetterRating = (value: NumericRating): 'A' | 'B' | 'C' | 'D' | 'E' => {
   // Keep internal scoring consistent where A is highest (5) and E is lowest (1)
   const map: Record<NumericRating, 'A' | 'B' | 'C' | 'D' | 'E'> = {
@@ -85,12 +71,18 @@ const RATING_LABELS: Record<NumericRating, string> = {
 export default function SurveyPageContent() {
   const searchParams = useSearchParams();
   const initialCompanyId = searchParams.get('companyId') || '';
+  const initialEmployeeEmail = (searchParams.get('employeeEmail') || '').trim().toLowerCase();
+  const validatedEmployeeEmail =
+    initialEmployeeEmail && initialEmployeeEmail.includes('@') && initialEmployeeEmail.includes('.')
+      ? initialEmployeeEmail
+      : '';
   const sessionStorageKey = useMemo(() => {
     if (!initialCompanyId) return null;
     return `ohd_exam_session:${initialCompanyId}`;
   }, [initialCompanyId]);
 
   const [company, setCompany] = useState<Company | null>(null);
+  const [respondentEmail, setRespondentEmail] = useState<string>(validatedEmployeeEmail);
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [sections, setSections] = useState<Section[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -111,8 +103,12 @@ export default function SurveyPageContent() {
   const [examNavOpen, setExamNavOpen] = useState(false);
   /** Accordion: which pillar groups are expanded in the question paper nav */
   const [expandedPillarNames, setExpandedPillarNames] = useState<Set<string>>(() => new Set());
+  const requiresEmailInput = !validatedEmployeeEmail;
 
-  const availableDepartments = company?.departments?.length ? company.departments : DEPARTMENTS;
+  const availableDepartments = useMemo(
+    () => (company?.departments || []).map((d) => d.trim()).filter(Boolean),
+    [company?.departments],
+  );
 
   const timeoutHandledRef = useRef(false);
   const submitHandledRef = useRef(false);
@@ -479,6 +475,7 @@ export default function SurveyPageContent() {
       }));
       await responseAPI.submit({
         companyId: company._id,
+        employeeEmail: respondentEmail || undefined,
         answers,
         department: department || undefined,
         service: 'Organizational Health Diagnostic',
@@ -616,19 +613,52 @@ export default function SurveyPageContent() {
             <h1 className="text-2xl font-bold text-gray-900 mb-2">Organizational Health Diagnostic</h1>
             <p className="text-gray-600">{company.name}</p>
           </div>
+          {requiresEmailInput && (
+            <>
+              <p className="text-sm font-medium text-gray-700 mb-3">Enter your email</p>
+              <input
+                type="email"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-6"
+                value={respondentEmail}
+                onChange={(e) => setRespondentEmail(e.target.value.trim().toLowerCase())}
+                placeholder="name@example.com"
+                autoComplete="email"
+              />
+            </>
+          )}
           <p className="text-sm font-medium text-gray-700 mb-3">Choose your department</p>
-          <select
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-6"
-            onChange={(e) => setDepartmentChoice(e.target.value)}
-            value={departmentChoice}
-          >
-            <option value="">Select department...</option>
-            {availableDepartments.map((dept) => (
-              <option key={dept} value={dept}>{dept}</option>
-            ))}
-          </select>
+          {availableDepartments.length > 0 ? (
+            <select
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-6"
+              onChange={(e) => setDepartmentChoice(e.target.value)}
+              value={departmentChoice}
+            >
+              <option value="">Select department...</option>
+              {availableDepartments.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 mb-6"
+              value={departmentChoice}
+              onChange={(e) => setDepartmentChoice(e.target.value)}
+              placeholder="Enter your department"
+            />
+          )}
           <button
             onClick={() => {
+              if (requiresEmailInput) {
+                const email = respondentEmail.trim().toLowerCase();
+                const ok = email.includes('@') && email.includes('.');
+                if (!ok) {
+                  toast.error('Please enter a valid email');
+                  return;
+                }
+              }
               const value = departmentChoice.trim();
               if (value) {
                 setDepartment(value);

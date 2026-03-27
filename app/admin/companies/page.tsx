@@ -33,6 +33,7 @@ function normalizeDepartmentList(departments: unknown): string[] {
 }
 
 const SIMPLE_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const RECIPIENT_EMAIL_TOKEN = '__RECIPIENT_EMAIL__';
 
 function normalizeRecipientList(emails: string[]): string[] {
   const seen = new Set<string>();
@@ -503,13 +504,23 @@ export default function CompaniesPage() {
     }
 
     const surveyLink = buildPublicSurveyStartUrl(publicAppBaseUrl, selectedCompanyId);
+    const personalizedSurveyLink = (() => {
+      try {
+        const url = new URL(surveyLink);
+        url.searchParams.set('employeeEmail', RECIPIENT_EMAIL_TOKEN);
+        return url.toString();
+      } catch {
+        const joiner = surveyLink.includes('?') ? '&' : '?';
+        return `${surveyLink}${joiner}employeeEmail=${RECIPIENT_EMAIL_TOKEN}`;
+      }
+    })();
 
     try {
       setSendingMail(true);
       await mailAPI.sendBulk({
         subject: mailSubject.trim(),
         // Send a direct survey link so participants land on the survey, not the details form
-        surveyLink,
+        surveyLink: personalizedSurveyLink,
         recipients: recipientsToSend,
         companyId: selectedCompanyId,
         notes: mailNotes,

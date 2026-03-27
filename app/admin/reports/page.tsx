@@ -7,7 +7,6 @@ import {
   companyAPI,
   reportAPI,
   responseAPI,
-  exportAPI,
   questionPaperAPI,
 } from '@/lib/apiClient';
 import toast from 'react-hot-toast';
@@ -24,6 +23,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { toPng } from 'html-to-image';
 
 interface Company {
   _id: string;
@@ -34,6 +34,11 @@ interface QSection {
   _id: string;
   name: string;
   order?: number;
+  questions?: Array<{
+    _id: string;
+    text: string;
+    order?: number;
+  }>;
 }
 
 interface QPillar {
@@ -54,6 +59,13 @@ interface OverallReport {
   summaryInsights?: string[];
   ratingDistributionPercentage?: { A: number; B: number; C: number; D: number; E: number };
   ratingDistribution?: { A: number; B: number; C: number; D: number; E: number };
+  benchmark?: {
+    band: string;
+    healthStatus: string;
+    colorCode: string;
+    colorHex: string;
+    minScore: number;
+  };
 }
 
 interface QuestionStat {
@@ -78,6 +90,7 @@ interface CompanySummary {
   completedCount: number;
   pendingCount: number;
   completedEmails: string[];
+  completedUsers?: string[];
   pendingEmails: string[];
   invitedEmails?: string[];
   departments?: string[];
@@ -85,46 +98,103 @@ interface CompanySummary {
   totalResponses: number;
 }
 
-const PIE_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#f97316', '#ef4444'];
+interface EmployeeResponseLite {
+  employeeEmail?: string;
+  employeeName?: string;
+}
+
+const PIE_COLORS = ['#059669', '#4338CA', '#FBBF24', '#F97316', '#DC2626'];
+
+/** Matches manual Excel report: columns SD, D, N, A, SA (storage uses E,D,C,B,A). */
+function ratingCountToLikert(rc: QuestionStat['ratingCount']) {
+  return {
+    SD: rc.E,
+    D: rc.D,
+    N: rc.C,
+    A: rc.B,
+    SA: rc.A,
+  };
+}
+
+const LIKERT_CHART_COLORS = {
+  SD: '#93c5fd',
+  D: '#f97316',
+  N: '#94a3b8',
+  A: '#eab308',
+  SA: '#1e40af',
+} as const;
+
+type OhiBand = {
+  min: number;
+  max: number;
+  label: string;
+  color: string;
+};
+
+const OHI_BANDS: OhiBand[] = [
+  { min: 90, max: 100, label: '90% - 100%', color: '#059669' },
+  { min: 80, max: 89.9, label: '80% - 89.9%', color: '#4338CA' },
+  { min: 70, max: 79.9, label: '70% - 79.9%', color: '#FBBF24' },
+  { min: 60, max: 69.9, label: '60% - 69.9%', color: '#F97316' },
+  { min: 0, max: 59.9, label: 'Below 60%', color: '#DC2626' },
+];
+
+function getOriColorByPercentage(value: number): string {
+  if (value >= 90) return '#059669'; // Green
+  if (value >= 80) return '#4338CA'; // Blue
+  if (value >= 70) return '#FBBF24'; // Yellow
+  if (value >= 60) return '#F97316'; // Orange
+  return '#DC2626'; // Red
+}
+
 
 function ReportsPageContent() {
   const searchParams = useSearchParams();
   const initialCompanyId = searchParams.get('companyId') || '';
   const openedFromCompanyAnalytics = useRef(!!initialCompanyId);
+  const summaryRequestSeq = useRef(0);
+  const reportRequestSeq = useRef(0);
+  const reportImageRef = useRef<HTMLDivElement | null>(null);
 
   const [companies, setCompanies] = useState<Company[]>([]);
   const [questionPillars, setQuestionPillars] = useState<QPillar[]>([]);
-  const [selectedCompany, setSelectedCompany] = useState<string>('');
+  const [selectedCompany, setSelectedCompany] = useState<string>(() => initialCompanyId);
   const [overall, setOverall] = useState<OverallReport | null>(null);
   const [sections, setSections] = useState<SectionStat[]>([]);
   const [selectedPillarId, setSelectedPillarId] = useState<string>('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [selectedSectionId, setSelectedSectionId] = useState<string>('');
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>('');
   const [validatedUserEmail, setValidatedUserEmail] = useState<string>('');
   const [companySummary, setCompanySummary] = useState<CompanySummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingReport, setLoadingReport] = useState(false);
-  const [showCompletedList, setShowCompletedList] = useState(false);
-  const [showPendingList, setShowPendingList] = useState(false);
-  const [bootstrapDone, setBootstrapDone] = useState(false);
+  const [activeUserList, setActiveUserList] = useState<'completed' | 'pending' | 'invited' | null>(null);
+  const [completedFallbackUsers, setCompletedFallbackUsers] = useState<string[]>([]);
+  const [loadingCompletedFallback, setLoadingCompletedFallback] = useState(false);
 
   const fetchCompanySummary = useCallback(async (companyId: string) => {
+    const requestId = ++summaryRequestSeq.current;
     try {
       setLoadingSummary(true);
       const res = await responseAPI.getCompanySummary(companyId);
+      if (requestId !== summaryRequestSeq.current) return;
       setCompanySummary(res.data || null);
     } catch (error: unknown) {
+      if (requestId !== summaryRequestSeq.current) return;
       console.error('Failed to load company summary', error);
       const message =
         error instanceof Error ? error.message : 'Failed to load company response summary';
       toast.error(message);
       setCompanySummary(null);
     } finally {
+      if (requestId !== summaryRequestSeq.current) return;
       setLoadingSummary(false);
     }
   }, []);
 
   const fetchReport = useCallback(async () => {
+    const requestId = ++reportRequestSeq.current;
     setLoadingReport(true);
     try {
       if (!selectedCompany) {
@@ -140,6 +210,7 @@ function ReportsPageContent() {
         else if (selectedPillarId) globalParams.pillarId = selectedPillarId;
 
         const res = await reportAPI.getOverallReport(globalParams);
+        if (requestId !== reportRequestSeq.current) return;
         setOverall(res.data.overallStats || null);
         setSections(res.data.sectionStats || []);
         return;
@@ -157,15 +228,18 @@ function ReportsPageContent() {
       else if (selectedPillarId) params.pillarId = selectedPillarId;
 
       const res = await reportAPI.getOverallReport(params);
+      if (requestId !== reportRequestSeq.current) return;
       setOverall(res.data.overallStats || null);
       setSections(res.data.sectionStats || []);
     } catch (error: unknown) {
+      if (requestId !== reportRequestSeq.current) return;
       console.error('Failed to load report', error);
       const message = error instanceof Error ? error.message : 'Failed to load report';
       toast.error(message);
       setOverall(null);
       setSections([]);
     } finally {
+      if (requestId !== reportRequestSeq.current) return;
       setLoadingReport(false);
     }
   }, [
@@ -192,41 +266,85 @@ function ReportsPageContent() {
         setCompanies(allCompanies);
         const pillars = (qpRes.data?.pillars as QPillar[]) || [];
         setQuestionPillars(pillars);
-        if (initialCompanyId) {
-          setSelectedCompany(initialCompanyId);
-        }
       } catch (error: unknown) {
         console.error('Failed to bootstrap reports', error);
         toast.error(error instanceof Error ? error.message : 'Failed to load data');
-      } finally {
-        if (!cancelled) setBootstrapDone(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [initialCompanyId]);
+  }, []);
+
+  // If the URL query params become available after first render, ensure the selection matches.
+  useEffect(() => {
+    if (initialCompanyId && !selectedCompany) setSelectedCompany(initialCompanyId);
+  }, [initialCompanyId, selectedCompany]);
 
   useEffect(() => {
-    if (!bootstrapDone) return;
     if (selectedCompany) {
       void fetchCompanySummary(selectedCompany);
     } else {
       setCompanySummary(null);
     }
-  }, [bootstrapDone, selectedCompany, fetchCompanySummary]);
+  }, [selectedCompany, fetchCompanySummary]);
 
   useEffect(() => {
-    if (!bootstrapDone) return;
+    let cancelled = false;
+    const shouldFetchCompletedFallback =
+      !!selectedCompany &&
+      activeUserList === 'completed' &&
+      !!companySummary &&
+      (companySummary.completedCount ?? 0) > 0 &&
+      (companySummary.completedEmails?.length ?? 0) === 0;
+
+    if (!shouldFetchCompletedFallback) {
+      setCompletedFallbackUsers([]);
+      setLoadingCompletedFallback(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        setLoadingCompletedFallback(true);
+        const res = await responseAPI.getByCompany(selectedCompany);
+        if (cancelled) return;
+        const responses = ((res.data?.responses as EmployeeResponseLite[]) || []);
+        const unique = new Set<string>();
+        responses.forEach((r, idx) => {
+          const email = (r.employeeEmail || '').trim().toLowerCase();
+          const name = (r.employeeName || '').trim();
+          const label = email || name || `Response ${idx + 1}`;
+          unique.add(label);
+        });
+        setCompletedFallbackUsers(Array.from(unique));
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Failed to fetch completed fallback users', error);
+        setCompletedFallbackUsers([]);
+      } finally {
+        if (cancelled) return;
+        setLoadingCompletedFallback(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeUserList, companySummary, selectedCompany]);
+
+  useEffect(() => {
     void fetchReport();
-  }, [bootstrapDone, fetchReport]);
+  }, [fetchReport]);
 
   const handleCompanyChange = (id: string) => {
     setSelectedCompany(id);
     setSelectedDepartment('');
     setSelectedPillarId('');
     setSelectedSectionId('');
+    setSelectedQuestionId('');
     setValidatedUserEmail('');
+    setActiveUserList(null);
   };
 
   const sectionOptions = useMemo(() => {
@@ -253,67 +371,229 @@ function ReportsPageContent() {
     if (!stillThere) setSelectedSectionId('');
   }, [sectionOptions, selectedSectionId]);
 
-  const pieData = useMemo(() => {
-    if (!overall?.ratingDistribution) return [];
-    return [
-      { name: 'Strongly Agree', value: overall.ratingDistribution.A },
-      { name: 'Agree', value: overall.ratingDistribution.B },
-      { name: 'Neutral', value: overall.ratingDistribution.C },
-      { name: 'Disagree', value: overall.ratingDistribution.D },
-      { name: 'Strongly Disagree', value: overall.ratingDistribution.E },
-    ].filter((d) => d.value > 0);
-  }, [overall]);
+  const questionOptions = useMemo(() => {
+    const options: Array<{
+      questionId: string;
+      questionText: string;
+      sectionId: string;
+      sectionName: string;
+      pillarName: string;
+    }> = [];
+    const seen = new Set<string>();
 
-  const sectionBarData = useMemo(() => {
-    return sections.map((s) => ({
-      name: s.sectionName.length > 22 ? s.sectionName.substring(0, 22) + '…' : s.sectionName,
-      Percentage: Number(s.sectionPercentage.toFixed(1)),
-    }));
-  }, [sections]);
-
-  const pillarChartData = useMemo(() => {
-    if (!sections.length) return [];
-    const data = sections.map((s) => {
-      const label =
-        s.sectionName.length > 18 ? s.sectionName.substring(0, 18) + '…' : s.sectionName;
-      let a = 0,
-        b = 0,
-        c = 0,
-        d = 0,
-        e = 0;
-      s.questionStats.forEach((q) => {
-        a += q.ratingCount?.A || 0;
-        b += q.ratingCount?.B || 0;
-        c += q.ratingCount?.C || 0;
-        d += q.ratingCount?.D || 0;
-        e += q.ratingCount?.E || 0;
+    questionPillars.forEach((pillar) => {
+      if (selectedPillarId && pillar._id !== selectedPillarId) return;
+      (pillar.sections || []).forEach((section) => {
+        if (selectedSectionId && section._id !== selectedSectionId) return;
+        (section.questions || []).forEach((q) => {
+          if (!q?._id || seen.has(q._id)) return;
+          seen.add(q._id);
+          options.push({
+            questionId: q._id,
+            questionText: q.text || 'Untitled question',
+            sectionId: section._id,
+            sectionName: section.name || 'Section',
+            pillarName: pillar.name || 'Pillar',
+          });
+        });
       });
-      return { name: label, SA: a, A: b, N: c, D: d, SD: e };
     });
-    if (data.length > 0) {
-      data.push({
-        name: 'TOTAL',
-        SA: data.reduce((acc, x) => acc + x.SA, 0),
-        A: data.reduce((acc, x) => acc + x.A, 0),
-        N: data.reduce((acc, x) => acc + x.N, 0),
-        D: data.reduce((acc, x) => acc + x.D, 0),
-        SD: data.reduce((acc, x) => acc + x.SD, 0),
+
+    if (options.length === 0) {
+      sections.forEach((sec) => {
+        sec.questionStats.forEach((q) => {
+          if (!q.questionId || seen.has(q.questionId)) return;
+          seen.add(q.questionId);
+          options.push({
+            questionId: q.questionId,
+            questionText: q.questionText || 'Untitled question',
+            sectionId: sec.sectionId,
+            sectionName: sec.sectionName || 'Section',
+            pillarName: '',
+          });
+        });
       });
     }
-    return data;
-  }, [sections]);
 
-  const departmentChartData = useMemo(() => {
-    if (!companySummary?.departmentBreakdown) return [];
-    if (selectedDepartment) {
-      const n = overall?.totalResponses ?? 0;
-      return n > 0 ? [{ name: selectedDepartment, Responses: n }] : [];
+    return options.sort((a, b) => a.questionText.localeCompare(b.questionText));
+  }, [questionPillars, sections, selectedPillarId, selectedSectionId]);
+
+  useEffect(() => {
+    if (!selectedQuestionId) return;
+    const stillThere = questionOptions.some((q) => q.questionId === selectedQuestionId);
+    if (!stillThere) setSelectedQuestionId('');
+  }, [questionOptions, selectedQuestionId]);
+
+  const scopedSections = useMemo(() => {
+    if (!selectedQuestionId) return sections;
+    return sections
+      .map((sec) => {
+        const matched = sec.questionStats.filter((q) => q.questionId === selectedQuestionId);
+        if (matched.length === 0) return null;
+        const only = matched[0];
+        const weightedScore =
+          only.ratingCount.A * 5 +
+          only.ratingCount.B * 4 +
+          only.ratingCount.C * 3 +
+          only.ratingCount.D * 2 +
+          only.ratingCount.E * 1;
+        const sectionPercentage =
+          only.totalResponses > 0 ? (weightedScore / (only.totalResponses * 5)) * 100 : 0;
+        return {
+          ...sec,
+          questionStats: matched,
+          sectionPercentage,
+          totalResponses: only.totalResponses,
+        };
+      })
+      .filter((sec): sec is SectionStat => sec !== null);
+  }, [sections, selectedQuestionId]);
+
+  const displayedOverall = useMemo(() => {
+    if (!selectedQuestionId) return overall;
+    if (scopedSections.length === 0) {
+      return {
+        overallPercentage: 0,
+        totalResponses: 0,
+        totalCompanies: selectedCompany ? 1 : (overall?.totalCompanies || 0),
+        summaryInsights: [],
+      } as OverallReport;
     }
-    return Object.entries(companySummary.departmentBreakdown).map(([dept, stats]) => ({
-      name: dept,
-      Responses: stats.responses,
-    }));
-  }, [companySummary, selectedDepartment, overall?.totalResponses]);
+
+    let A = 0;
+    let B = 0;
+    let C = 0;
+    let D = 0;
+    let E = 0;
+    let totalResponses = 0;
+
+    scopedSections.forEach((sec) => {
+      sec.questionStats.forEach((q) => {
+        A += q.ratingCount.A;
+        B += q.ratingCount.B;
+        C += q.ratingCount.C;
+        D += q.ratingCount.D;
+        E += q.ratingCount.E;
+        totalResponses += q.totalResponses;
+      });
+    });
+
+    const totalRatings = A + B + C + D + E;
+    const overallPercentage =
+      totalRatings > 0 ? ((A * 5 + B * 4 + C * 3 + D * 2 + E * 1) / (totalRatings * 5)) * 100 : 0;
+
+    return {
+      overallPercentage,
+      totalResponses,
+      totalCompanies: selectedCompany ? 1 : (overall?.totalCompanies || 0),
+      ratingDistribution: { A, B, C, D, E },
+      ratingDistributionPercentage:
+        totalRatings > 0
+          ? {
+              A: (A / totalRatings) * 100,
+              B: (B / totalRatings) * 100,
+              C: (C / totalRatings) * 100,
+              D: (D / totalRatings) * 100,
+              E: (E / totalRatings) * 100,
+            }
+          : { A: 0, B: 0, C: 0, D: 0, E: 0 },
+      summaryInsights: ['Filtered by question'],
+    };
+  }, [selectedCompany, selectedQuestionId, overall, scopedSections]);
+
+  const sectionManualLabel = useCallback(
+    (sectionId: string, fallbackIndex: number) => {
+      for (let pi = 0; pi < questionPillars.length; pi++) {
+        const list = questionPillars[pi].sections || [];
+        const sorted = [...list].sort(
+          (a, b) => (a.order ?? 0) - (b.order ?? 0)
+        );
+        const idx = sorted.findIndex((s) => s._id === sectionId);
+        if (idx >= 0) return `P${pi + 1} ${idx + 1}`;
+      }
+      return `P1 ${fallbackIndex + 1}`;
+    },
+    [questionPillars]
+  );
+
+  /** Pillar-level weighted percentages across all questions in each pillar. */
+  const pillarLikertPillarSummary = useMemo(() => {
+
+    const sectionToPillar = new Map<string, { pillarNo: number; pillarName: string }>();
+    questionPillars.forEach((p, pIdx) => {
+      const sortedSections = [...(p.sections || [])].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0)
+      );
+      sortedSections.forEach((s) => {
+        sectionToPillar.set(s._id, {
+          pillarNo: pIdx + 1,
+          pillarName: (p.name || '').trim() || `P${pIdx + 1}`,
+        });
+      });
+    });
+
+    const countsByPillar = new Map<
+      string,
+      {
+        pillarCode: string;
+        pillarName: string;
+        SD: number;
+        D: number;
+        N: number;
+        A: number;
+        SA: number;
+        total: number;
+      }
+    >();
+
+    scopedSections.forEach((sec, secIdx) => {
+      const pillarMeta = sectionToPillar.get(sec.sectionId);
+      const fallbackMatch = /^P(\d+)\s+/.exec(sectionManualLabel(sec.sectionId, secIdx));
+      const fallbackPillarNo = Number(fallbackMatch?.[1] || 1);
+      const pillarNo = pillarMeta?.pillarNo ?? fallbackPillarNo;
+      const pillarCode = `P${pillarNo}`;
+      const pillarName = pillarMeta?.pillarName ?? pillarCode;
+      if (!countsByPillar.has(pillarCode)) {
+        countsByPillar.set(pillarCode, {
+          pillarCode,
+          pillarName,
+          SD: 0,
+          D: 0,
+          N: 0,
+          A: 0,
+          SA: 0,
+          total: 0,
+        });
+      }
+
+      const cur = countsByPillar.get(pillarCode)!;
+
+      sec.questionStats.forEach((q) => {
+        const L = ratingCountToLikert(q.ratingCount);
+        cur.SD += L.SD;
+        cur.D += L.D;
+        cur.N += L.N;
+        cur.A += L.A;
+        cur.SA += L.SA;
+        cur.total += L.SD + L.D + L.N + L.A + L.SA;
+      });
+    });
+
+    return Array.from(countsByPillar.values())
+      .sort((a, b) => a.pillarCode.localeCompare(b.pillarCode, undefined, { numeric: true }))
+      .map((pillar) => {
+        const pct = (v: number) => (pillar.total > 0 ? (v / pillar.total) * 100 : 0);
+        return {
+          pillarCode: pillar.pillarCode,
+          pillarName: pillar.pillarName,
+          SD: Number(pct(pillar.SD).toFixed(1)),
+          D: Number(pct(pillar.D).toFixed(1)),
+          N: Number(pct(pillar.N).toFixed(1)),
+          A: Number(pct(pillar.A).toFixed(1)),
+          SA: Number(pct(pillar.SA).toFixed(1)),
+        };
+      });
+  }, [questionPillars, scopedSections, sectionManualLabel]);
 
   const userStatusChartData = useMemo(() => {
     if (!validatedUserEmail || !companySummary) return [];
@@ -342,34 +622,76 @@ function ReportsPageContent() {
     return Array.from(new Set(all)).sort();
   }, [companySummary]);
 
-  const handleDownloadNumericReport = async () => {
-    if (!selectedCompany) {
-      toast.error('Please select a company to download its numeric report.');
+  const activeListMeta = useMemo(() => {
+    if (!companySummary || !activeUserList) return null;
+    if (activeUserList === 'completed') {
+      const emails =
+        (companySummary.completedEmails?.length ?? 0) > 0
+          ? (companySummary.completedEmails ?? [])
+          : (companySummary.completedUsers?.length ?? 0) > 0
+            ? (companySummary.completedUsers ?? [])
+            : completedFallbackUsers;
+      return {
+        title: 'Completed User List',
+        emptyMessage: 'No completed users captured for this company.',
+        emails,
+      };
+    }
+    if (activeUserList === 'pending') {
+      return {
+        title: 'Pending Email List',
+        emptyMessage:
+          'No pending emails detected. Either all invited users have completed, or no email list was available.',
+        emails: companySummary.pendingEmails ?? [],
+      };
+    }
+    return {
+      title: 'Invited Email List',
+      emptyMessage: 'No invited emails were parsed from the uploaded employee file.',
+      emails: companySummary.invitedEmails ?? [],
+    };
+  }, [activeUserList, companySummary, completedFallbackUsers]);
+
+  const handleDownloadReportImage = useCallback(async () => {
+    if (!reportImageRef.current) {
+      toast.error('Report image is not ready yet.');
       return;
     }
     try {
-      const res = await exportAPI.exportExcel(selectedCompany);
-      const blob = new Blob([res.data], {
-        type:
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8',
+      const dataUrl = await toPng(reportImageRef.current, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: '#ffffff',
+        filter: (node) => {
+          if (!(node instanceof HTMLElement)) return true;
+          return !node.dataset.exportHide;
+        },
       });
-      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.download = 'ohd-company-report.xlsx';
+      link.href = dataUrl;
+      link.download = 'report-image.png';
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
     } catch (error: unknown) {
-      console.error('Failed to download report', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to download numeric report';
-      toast.error(message);
+      console.error('Failed to download report image', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to download report image');
     }
-  };
+  }, []);
 
   const showGlobalOption = !openedFromCompanyAnalytics.current;
+  const activeBenchmarkColor =
+    typeof displayedOverall?.overallPercentage === 'number'
+      ? getOriColorByPercentage(displayedOverall.overallPercentage)
+      : '#059669';
+  const activeBenchmarkStatus = selectedQuestionId
+    ? 'Question-wise filtered view'
+    : (displayedOverall?.benchmark?.healthStatus || 'N/A');
+  const currentOverall = displayedOverall?.overallPercentage ?? null;
+  const activeBandIndex =
+    currentOverall === null
+      ? -1
+      : OHI_BANDS.findIndex((band) => currentOverall >= band.min && currentOverall <= band.max);
 
   return (
     <AdminLayout>
@@ -396,14 +718,6 @@ function ReportsPageContent() {
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              onClick={handleDownloadNumericReport}
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 disabled:opacity-50"
-              disabled={!selectedCompany}
-            >
-              Download Numeric Report
-            </button>
           </div>
         </div>
 
@@ -418,16 +732,30 @@ function ReportsPageContent() {
               Overall Health Score
             </p>
             <h3 className="text-3xl font-bold text-gray-900">
-              {overall && typeof overall.overallPercentage === 'number'
-                ? `${overall.overallPercentage.toFixed(1)}%`
+              {displayedOverall && typeof displayedOverall.overallPercentage === 'number'
+                ? `${displayedOverall.overallPercentage.toFixed(1)}%`
                 : 'N/A'}
             </h3>
             <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden">
               <div
-                className="h-full bg-emerald-500 rounded-full"
-                style={{ width: `${overall?.overallPercentage || 0}%` }}
+                className="h-full rounded-full"
+                aria-label="ORI benchmark bar"
+                title={
+                  selectedQuestionId
+                    ? 'Question-wise filtered view'
+                    : displayedOverall?.benchmark
+                      ? `${displayedOverall.benchmark.colorCode} - ${displayedOverall.benchmark.healthStatus}`
+                      : 'No benchmark'
+                }
+                style={{
+                  backgroundColor: activeBenchmarkColor,
+                  width: `${displayedOverall?.overallPercentage || 0}%`,
+                }}
               />
             </div>
+            <p className="text-xs mt-2 font-medium" style={{ color: activeBenchmarkColor }}>
+              {activeBenchmarkStatus}
+            </p>
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
@@ -435,7 +763,7 @@ function ReportsPageContent() {
               Total Responses
             </p>
             <h3 className="text-3xl font-bold text-gray-900">
-              {overall?.totalResponses?.toLocaleString() || '0'}
+              {displayedOverall?.totalResponses?.toLocaleString() || '0'}
             </h3>
             <p className="text-xs text-gray-400 mt-1">
               {selectedCompany ? 'For current filters' : 'Across all surveys'}
@@ -447,57 +775,91 @@ function ReportsPageContent() {
               Active Companies
             </p>
             <h3 className="text-3xl font-bold text-gray-900">
-              {selectedCompany ? '1' : overall?.totalCompanies || '0'}
+              {selectedCompany ? '1' : displayedOverall?.totalCompanies || '0'}
             </h3>
             <p className="text-xs text-gray-400 mt-1">Diagnostic entities</p>
           </div>
         </div>
 
+        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
+            <h3 className="text-sm font-bold text-gray-900">OHI Color Criteria</h3>
+            {currentOverall !== null && (
+              <p className="text-xs text-gray-500">
+                Current score: <span className="font-semibold text-gray-900">{currentOverall.toFixed(1)}%</span>
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            {OHI_BANDS.map((band, index) => {
+              const isActive = index === activeBandIndex;
+              return (
+                <div
+                  key={band.label}
+                  className={`rounded-lg border p-3 ${
+                    isActive
+                      ? 'border-emerald-400 ring-2 ring-emerald-300 ring-offset-1'
+                      : 'border-gray-200'
+                  }`}
+                >
+                  <div className="h-2.5 rounded-full mb-2" style={{ backgroundColor: band.color }} />
+                  <p className="text-xs font-semibold text-gray-800">{band.label}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {selectedCompany && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-white border border-emerald-200 rounded-xl p-6 shadow-sm">
+            <button
+              type="button"
+              disabled={!companySummary || loadingSummary || (companySummary.completedCount ?? 0) === 0}
+              onClick={() => setActiveUserList('completed')}
+              className="bg-white border border-emerald-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-emerald-300 transition-colors"
+            >
               <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">
                 Completed Users
               </p>
               <h3 className="text-3xl font-bold text-emerald-700">
                 {loadingSummary ? '—' : (companySummary?.completedCount ?? 0)}
               </h3>
-              <button
-                type="button"
-                disabled={!companySummary || (companySummary.completedEmails || []).length === 0}
-                onClick={() => setShowCompletedList(true)}
-                className="mt-3 text-xs font-semibold text-emerald-700 hover:text-emerald-900 disabled:text-gray-300"
-              >
-                View completed email list
-              </button>
-            </div>
-            <div className="bg-white border border-amber-200 rounded-xl p-6 shadow-sm">
+              <p className="mt-3 text-xs font-semibold text-emerald-700">
+                View completed user list
+              </p>
+            </button>
+            <button
+              type="button"
+              disabled={!companySummary || loadingSummary || (companySummary.pendingCount ?? 0) === 0}
+              onClick={() => setActiveUserList('pending')}
+              className="bg-white border border-amber-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-amber-300 transition-colors"
+            >
               <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">
                 Pending Users
               </p>
               <h3 className="text-3xl font-bold text-amber-700">
                 {loadingSummary ? '—' : (companySummary?.pendingCount ?? 0)}
               </h3>
-              <button
-                type="button"
-                disabled={!companySummary || (companySummary.pendingEmails || []).length === 0}
-                onClick={() => setShowPendingList(true)}
-                className="mt-3 text-xs font-semibold text-amber-700 hover:text-amber-900 disabled:text-gray-300"
-              >
+              <p className="mt-3 text-xs font-semibold text-amber-700">
                 View pending email list
-              </button>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              </p>
+            </button>
+            <button
+              type="button"
+              disabled={!companySummary || loadingSummary || (companySummary.totalInvited ?? 0) === 0}
+              onClick={() => setActiveUserList('invited')}
+              className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-gray-300 transition-colors"
+            >
               <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1">
                 Total Invited (via Excel)
               </p>
               <h3 className="text-3xl font-bold text-gray-900">
                 {loadingSummary ? '—' : (companySummary?.totalInvited ?? 0)}
               </h3>
-              <p className="text-xs text-gray-400 mt-1">
-                Based on parsed email addresses from the uploaded employee file.
+              <p className="mt-3 text-xs font-semibold text-gray-700">
+                View invited email list
               </p>
-            </div>
+            </button>
           </div>
         )}
 
@@ -506,7 +868,7 @@ function ReportsPageContent() {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               Report filters
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
                 <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
                   Department
@@ -566,6 +928,24 @@ function ReportsPageContent() {
 
               <div>
                 <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Question
+                </p>
+                <select
+                  value={selectedQuestionId}
+                  onChange={(e) => setSelectedQuestionId(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white"
+                >
+                  <option value="">All questions in scope</option>
+                  {questionOptions.map((q) => (
+                    <option key={q.questionId} value={q.questionId}>
+                      {q.questionText}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
                   User email (must be in Excel list)
                 </p>
                 <select
@@ -595,156 +975,109 @@ function ReportsPageContent() {
           </div>
         )}
 
-        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Distribution (current filters)</h2>
-          </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm" ref={reportImageRef}>
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-1">
+              <h3 className="text-md font-bold text-gray-900">Pillar analytics</h3>
+              <button
+                type="button"
+                onClick={() => void handleDownloadReportImage()}
+                data-export-hide="true"
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Download report image
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mb-6">
+              X-axis: pillars (P1..P5). Y-axis: percentage. Bars grouped by
+              Strongly Disagree (SD), Disagree (D), Neutral (N), Agree (A), Strongly Agree (SA).
+            </p>
 
-          <div className="h-80 w-full">
-            {pillarChartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={pillarChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#666' }} />
-                  <YAxis tick={{ fontSize: 10, fill: '#666' }} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                  <Legend wrapperStyle={{ fontSize: 10, paddingTop: 10 }} />
-                  <Bar dataKey="SA" name="Strongly Agree" fill="#10b981" />
-                  <Bar dataKey="A" name="Agree" fill="#14b8a6" />
-                  <Bar dataKey="N" name="Neutral" fill="#94a3b8" />
-                  <Bar dataKey="D" name="Disagree" fill="#f59e0b" />
-                  <Bar dataKey="SD" name="Strongly Disagree" fill="#ef4444" />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-gray-400 italic text-sm">
-                No data for these filters.
+            {pillarLikertPillarSummary.length === 0 ? (
+              <div className="h-44 flex items-center justify-center text-gray-400 italic text-sm rounded-xl border border-gray-100 bg-slate-50/50">
+                Not enough section-level data to chart.
               </div>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-            <h3 className="text-md font-bold text-gray-900 mb-6">Section performance</h3>
-            <div className="h-64 w-full">
-              {sectionBarData.length > 0 ? (
+            ) : (
+              <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={sectionBarData} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" horizontal stroke="#eee" />
-                    <XAxis type="number" hide />
-                    <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Bar dataKey="Percentage" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={15} />
+                  <BarChart data={pillarLikertPillarSummary}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                    <XAxis dataKey="pillarCode" tick={{ fontSize: 10 }} />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(v) => `${v}%`}
+                    />
+                    <Tooltip
+                      formatter={(v) => `${Number(v ?? 0).toFixed(1)}%`}
+                      labelFormatter={(value) => `${String(value)}`}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="SD" name="Strongly Disagree" fill={LIKERT_CHART_COLORS.SD}>
+                      {pillarLikertPillarSummary.map((entry, idx) => (
+                        <Cell key={`sd-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.SD)} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="D" name="Disagree" fill={LIKERT_CHART_COLORS.D}>
+                      {pillarLikertPillarSummary.map((entry, idx) => (
+                        <Cell key={`d-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.D)} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="N" name="Neutral" fill={LIKERT_CHART_COLORS.N}>
+                      {pillarLikertPillarSummary.map((entry, idx) => (
+                        <Cell key={`n-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.N)} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="A" name="Agree" fill={LIKERT_CHART_COLORS.A}>
+                      {pillarLikertPillarSummary.map((entry, idx) => (
+                        <Cell key={`a-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.A)} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="SA" name="Strongly Agree" fill={LIKERT_CHART_COLORS.SA}>
+                      {pillarLikertPillarSummary.map((entry, idx) => (
+                        <Cell key={`sa-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.SA)} />
+                      ))}
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-gray-400 italic text-sm">
-                  No section data.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-            <h3 className="text-md font-bold text-gray-900 mb-6">Response sentiment</h3>
-            <div className="h-64 w-full relative">
-              {pieData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieData}
-                      innerRadius={60}
-                      outerRadius={80}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {pieData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                    <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 10 }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full flex items-center justify-center text-gray-400 italic text-sm">
-                  No sentiment data.
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {selectedCompany && companySummary && (
-          <div
-            className={`grid grid-cols-1 gap-6 ${
-              validatedUserEmail ? 'lg:grid-cols-2' : ''
-            }`}
-          >
-            {validatedUserEmail && (
-              <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-                <h3 className="text-md font-bold text-gray-900 mb-4">
+        {selectedCompany && companySummary && validatedUserEmail && (
+          <div className="grid grid-cols-1 gap-6">
+            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h3 className="text-md font-bold text-gray-900">
                   User status (validated email)
                 </h3>
-                <div className="h-64 w-full">
-                  {userStatusChartData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={userStatusChartData}
-                          innerRadius={50}
-                          outerRadius={70}
-                          paddingAngle={4}
-                          dataKey="value"
-                        >
-                          {userStatusChartData.map((entry, index) => (
-                            <Cell
-                              key={`user-cell-${index}`}
-                              fill={PIE_COLORS[index % PIE_COLORS.length]}
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                        <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 10 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-gray-400 italic text-sm">
-                      This email is not on the invited list for this company.
-                    </div>
-                  )}
-                </div>
               </div>
-            )}
-
-            <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-              <h3 className="text-md font-bold text-gray-900 mb-4">Department responses (summary)</h3>
               <div className="h-64 w-full">
-                {departmentChartData.length > 0 ? (
+                {userStatusChartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={departmentChartData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" horizontal stroke="#eee" />
-                      <XAxis type="number" />
-                      <YAxis
-                        dataKey="name"
-                        type="category"
-                        width={100}
-                        tick={{ fontSize: 10 }}
-                      />
+                    <PieChart>
+                      <Pie
+                        data={userStatusChartData}
+                        innerRadius={50}
+                        outerRadius={70}
+                        paddingAngle={4}
+                        dataKey="value"
+                      >
+                        {userStatusChartData.map((entry, index) => (
+                          <Cell
+                            key={`user-cell-${index}`}
+                            fill={PIE_COLORS[index % PIE_COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
                       <Tooltip />
-                      <Bar
-                        dataKey="Responses"
-                        name="Responses"
-                        fill="#10b981"
-                        radius={[0, 4, 4, 0]}
-                        barSize={18}
-                      />
-                    </BarChart>
+                      <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 10 }} />
+                    </PieChart>
                   </ResponsiveContainer>
                 ) : (
                   <div className="h-full flex items-center justify-center text-gray-400 italic text-sm">
-                    No department information for this company.
+                    This email is not on the invited list for this company.
                   </div>
                 )}
               </div>
@@ -752,60 +1085,31 @@ function ReportsPageContent() {
           </div>
         )}
 
-        {showCompletedList && companySummary && (
+        {activeListMeta && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
             <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-gray-200 p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold text-gray-900">
-                  Completed Email List ({companySummary.completedEmails.length})
+                  {activeListMeta.title} ({activeListMeta.emails.length})
                 </h3>
                 <button
                   type="button"
-                  onClick={() => setShowCompletedList(false)}
+                  onClick={() => setActiveUserList(null)}
                   className="text-gray-400 hover:text-gray-600 text-sm"
                 >
                   Close
                 </button>
               </div>
-              {companySummary.completedEmails.length === 0 ? (
-                <p className="text-sm text-gray-500">No completed emails captured for this company.</p>
-              ) : (
-                <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-800">
-                  <ul className="space-y-1">
-                    {companySummary.completedEmails.map((email) => (
-                      <li key={email}>{email}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {showPendingList && companySummary && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-            <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-gray-900">
-                  Pending Email List ({companySummary.pendingEmails.length})
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setShowPendingList(false)}
-                  className="text-gray-400 hover:text-gray-600 text-sm"
-                >
-                  Close
-                </button>
-              </div>
-              {companySummary.pendingEmails.length === 0 ? (
+              {loadingCompletedFallback && activeUserList === 'completed' ? (
+                <p className="text-sm text-gray-500">Loading completed users...</p>
+              ) : activeListMeta.emails.length === 0 ? (
                 <p className="text-sm text-gray-500">
-                  No pending emails detected. Either all invited users have completed, or no email
-                  list was available.
+                  {activeListMeta.emptyMessage} Count data exists, but individual email rows were not returned.
                 </p>
               ) : (
                 <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-800">
                   <ul className="space-y-1">
-                    {companySummary.pendingEmails.map((email) => (
+                    {activeListMeta.emails.map((email) => (
                       <li key={email}>{email}</li>
                     ))}
                   </ul>
