@@ -372,7 +372,7 @@ function ReportsPageContent() {
         if (cancelled) return;
         const responses = ((res.data?.responses as EmployeeResponseLite[]) || []);
         const unique = new Set<string>();
-        responses.forEach((r, idx) => {
+        responses.forEach((r) => {
           const email = (r.employeeEmail || '').trim().toLowerCase();
           if (isValidEmail(email)) unique.add(email);
         });
@@ -765,13 +765,6 @@ function ReportsPageContent() {
   }, []);
 
   const showGlobalOption = !openedFromCompanyAnalytics.current;
-  const activeBenchmarkColor =
-    typeof displayedOverall?.overallPercentage === 'number'
-      ? getOriColorByPercentage(displayedOverall.overallPercentage)
-      : '#059669';
-  const activeBenchmarkStatus = selectedQuestionId
-    ? 'Question-wise filtered view'
-    : (displayedOverall?.benchmark?.healthStatus || 'N/A');
   const currentOverall = displayedOverall?.overallPercentage ?? null;
   const activeBandIndex =
     currentOverall === null
@@ -1116,7 +1109,10 @@ function ReportsPageContent() {
                       content={() => {
                         const len = pillarLikertPillarSummary.length || 1;
                         const avg = (key: 'SD' | 'D' | 'N' | 'A' | 'SA') =>
-                          pillarLikertPillarSummary.reduce((sum, row) => sum + (row as any)[key], 0) / len;
+                          pillarLikertPillarSummary.reduce(
+                            (sum, row) => sum + row[key],
+                            0,
+                          ) / len;
 
                         const items: Array<{ label: string; value: number }> = [
                           { label: 'Strongly Disagree', value: avg('SD') },

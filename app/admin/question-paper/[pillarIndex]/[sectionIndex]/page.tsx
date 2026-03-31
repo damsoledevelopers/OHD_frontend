@@ -56,7 +56,10 @@ export default function SectionQuestionsPage() {
 
   const currentPillar = pillars[pillarIndex] ?? null;
   const currentSection = currentPillar?.sections[sectionIndex] ?? null;
-  const questions = currentSection?.questions ?? [];
+  const questions = useMemo(
+    () => currentSection?.questions ?? [],
+    [currentSection],
+  );
 
   const answeredCount = useMemo(
     () => questions.filter((q) => typeof answers[q.id] === 'number').length,
@@ -112,7 +115,7 @@ export default function SectionQuestionsPage() {
     };
 
     loadDraft();
-  }, []);
+  }, [pillarIndex]);
 
   const ratingLabels = [
     'Strongly Disagree',
