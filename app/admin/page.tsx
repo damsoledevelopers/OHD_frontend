@@ -1,45 +1,113 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AdminLayout from '@/components/AdminLayout';
-import { companyAPI, reportAPI } from '@/lib/apiClient';
+import { companyAPI, responseAPI, departmentAPI } from '@/lib/apiClient';
 import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/api';
 import toast from 'react-hot-toast';
-import {
-  BarChart,
-  Bar,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts';
+import { notifyDepartmentsUpdated } from '@/lib/departmentsStorage';
+import { parseDepartmentFile } from '@/lib/parseDepartmentFile';
+import DepartmentNameModal from '@/components/DepartmentNameModal';
+import { Building2, FileSpreadsheet, ClipboardList, Pencil, Trash2, Plus, ChevronRight } from 'lucide-react';
 
-interface OverallStats {
-  overallPercentage: number;
-  ratingDistribution: { A: number; B: number; C: number; D: number; E: number };
-  ratingDistributionPercentage: { A: number; B: number; C: number; D: number; E: number };
-  totalResponses: number;
-  totalCompanies: number;
-  bestSection?: {
-    sectionId: string;
-    sectionName: string;
-    percentage: number;
-  } | null;
-  summaryInsights?: string[];
+interface CompanyRow {
+  _id: string;
+  name?: string;
+  email?: string;
+  industry?: string;
 }
+
+interface ResponseRow {
+  _id: string;
+  employeeEmail?: string;
+  employeeName?: string;
+  department?: string;
+  submittedAt?: string;
+  companyId?: { _id?: string; name?: string; email?: string } | string;
+}
+
+type ListModal = 'companies' | 'responses' | null;
 
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
-  const [overallStats, setOverallStats] = useState<OverallStats | null>(null);
-  const [companiesCount, setCompaniesCount] = useState(0);
-  const [sectionPerformanceData, setSectionPerformanceData] = useState<
-    { name: string; percentage: number }[]
-  >([]);
+  const [companies, setCompanies] = useState<CompanyRow[]>([]);
+  const [companiesTotal, setCompaniesTotal] = useState(0);
+  const [responses, setResponses] = useState<ResponseRow[]>([]);
+  const [responsesTotal, setResponsesTotal] = useState(0);
+  const [listModal, setListModal] = useState<ListModal>(null);
+  const [companiesModalPage, setCompaniesModalPage] = useState(1);
+  const [responsesModalPage, setResponsesModalPage] = useState(1);
+  const [modalLoading, setModalLoading] = useState(false);
+  const modalPageSize = 10;
+  const [uploadingDept, setUploadingDept] = useState(false);
+  const deptFileRef = useRef<HTMLInputElement>(null);
+  const [departments, setDepartments] = useState<Array<{ _id: string; name: string }>>([]);
+  const [deptModalOpen, setDeptModalOpen] = useState(false);
+  /** When set, modal is editing this row; otherwise add mode. */
+  const [editingDept, setEditingDept] = useState<{ _id: string; name: string } | null>(null);
+
+  const refreshDepartments = useCallback(async () => {
+    try {
+      const res = await departmentAPI.list();
+      setDepartments(res.data.departments || []);
+    } catch (error: unknown) {
+      console.error('Failed to load departments', error);
+      const message = error instanceof Error ? error.message : 'Failed to load departments';
+      toast.error(message);
+    }
+  }, []);
+
+  const loadCompaniesPage = useCallback(async (page: number) => {
+    setModalLoading(true);
+    try {
+      const res = await companyAPI.getPaginated({ page, limit: modalPageSize });
+      setCompanies(res.data.companies || []);
+      setCompaniesTotal(res.data.total || 0);
+      setCompaniesModalPage(page);
+    } catch (error: unknown) {
+      console.error('Failed to load companies page', error);
+      const message = error instanceof Error ? error.message : 'Failed to load companies page';
+      toast.error(message);
+    } finally {
+      setModalLoading(false);
+    }
+  }, [modalPageSize]);
+
+  const loadResponsesPage = useCallback(async (page: number) => {
+    setModalLoading(true);
+    try {
+      const res = await responseAPI.getAllPaginated({ page, limit: modalPageSize });
+      setResponses(res.data.responses || []);
+      setResponsesTotal(res.data.total || 0);
+      setResponsesModalPage(page);
+    } catch (error: unknown) {
+      console.error('Failed to load responses page', error);
+      const message = error instanceof Error ? error.message : 'Failed to load responses page';
+      toast.error(message);
+    } finally {
+      setModalLoading(false);
+    }
+  }, [modalPageSize]);
+
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      const [companiesRes, responsesRes] = await Promise.all([
+        companyAPI.getPaginated({ page: 1, limit: modalPageSize }),
+        responseAPI.getAllPaginated({ page: 1, limit: modalPageSize }),
+      ]);
+
+      setCompanies(companiesRes.data.companies || []);
+      setCompaniesTotal(companiesRes.data.total || 0);
+      setResponses(responsesRes.data.responses || []);
+      setResponsesTotal(responsesRes.data.total || 0);
+    } catch (error: unknown) {
+      console.error('Failed to load dashboard data', error);
+      const message = error instanceof Error ? error.message : 'Failed to load dashboard data';
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [modalPageSize]);
 
   useEffect(() => {
     const hasSession =
@@ -49,87 +117,122 @@ export default function AdminDashboard() {
       window.location.href = '/admin/login';
       return;
     }
-    
-    fetchDashboardData();
-  }, []);
+    void fetchDashboardData();
+    void refreshDepartments();
+  }, [fetchDashboardData, refreshDepartments]);
 
-  const fetchDashboardData = async () => {
+  const openAddDepartment = () => {
+    setEditingDept(null);
+    setDeptModalOpen(true);
+  };
+
+  const openEditDepartment = (dept: { _id: string; name: string }) => {
+    setEditingDept(dept);
+    setDeptModalOpen(true);
+  };
+
+  const handleDeptModalConfirm = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      toast.error('Name cannot be empty');
+      return;
+    }
     try {
-      setLoading(true);
-      
-      // Fetch all data in parallel
-      const [reportRes, companiesRes] = await Promise.all([
-        reportAPI.getOverallReport(),
-        companyAPI.getAll(),
-      ]);
-
-      const reportData = reportRes.data;
-      setOverallStats(reportData.overallStats || null);
-
-      // Prepare section performance data (top 10 sections by percentage)
-      const sectionStats =
-        (reportData.sectionStats as
-          | { sectionName: string; sectionPercentage: number }[]
-          | undefined) || [];
-
-      const performanceData = sectionStats
-        .slice()
-        .sort((a, b) => (b.sectionPercentage || 0) - (a.sectionPercentage || 0))
-        .slice(0, 10)
-        .map((s) => ({
-          name:
-            s.sectionName.length > 30
-              ? `${s.sectionName.substring(0, 30)}...`
-              : s.sectionName,
-          percentage:
-            typeof s.sectionPercentage === 'number'
-              ? Number(s.sectionPercentage.toFixed(1))
-              : 0,
-        }));
-
-      setSectionPerformanceData(performanceData);
-
-      setCompaniesCount(companiesRes.data.companies?.length || 0);
+      if (editingDept) {
+        await departmentAPI.update(editingDept._id, trimmed);
+        toast.success('Department updated');
+      } else {
+        await departmentAPI.create(trimmed);
+        toast.success('Department added');
+      }
+      await refreshDepartments();
+      notifyDepartmentsUpdated();
+      setDeptModalOpen(false);
+      setEditingDept(null);
     } catch (error: unknown) {
-      console.error('Failed to load dashboard data', error);
-      const message = error instanceof Error ? error.message : 'Failed to load dashboard data';
-      toast.error(message);
-    } finally {
-      setLoading(false);
+      const ax = error as { response?: { data?: { error?: string } } };
+      const msg =
+        ax.response?.data?.error ||
+        (error instanceof Error ? error.message : 'Could not save department');
+      toast.error(msg);
     }
   };
 
-  // Prepare rating distribution data for charts
-  const ratingData = overallStats
-    ? [
-        { name: 'A (Excellent)', value: overallStats.ratingDistribution.A, percentage: overallStats.ratingDistributionPercentage.A, color: '#10b981' },
-        { name: 'B (Good)', value: overallStats.ratingDistribution.B, percentage: overallStats.ratingDistributionPercentage.B, color: '#3b82f6' },
-        { name: 'C (Average)', value: overallStats.ratingDistribution.C, percentage: overallStats.ratingDistributionPercentage.C, color: '#f59e0b' },
-        { name: 'D (Poor)', value: overallStats.ratingDistribution.D, percentage: overallStats.ratingDistributionPercentage.D, color: '#ef4444' },
-        { name: 'E (Very Poor)', value: overallStats.ratingDistribution.E, percentage: overallStats.ratingDistributionPercentage.E, color: '#dc2626' },
-      ]
-    : [];
-
-  // Get health status color
-  const getHealthColor = (percentage: number) => {
-    if (percentage >= 80) return 'text-emerald-600';
-    if (percentage >= 60) return 'text-blue-600';
-    if (percentage >= 40) return 'text-yellow-600';
-    return 'text-red-600';
+  const handleDeptModalClose = () => {
+    setDeptModalOpen(false);
+    setEditingDept(null);
   };
 
-  const getHealthBgColor = (percentage: number) => {
-    if (percentage >= 80) return 'bg-emerald-50 border-emerald-200';
-    if (percentage >= 60) return 'bg-blue-50 border-blue-200';
-    if (percentage >= 40) return 'bg-yellow-50 border-yellow-200';
-    return 'bg-red-50 border-red-200';
+  const handleDeleteDepartment = async (id: string, name: string) => {
+    if (!window.confirm(`Remove "${name}" from the department list?`)) return;
+    try {
+      await departmentAPI.delete(id);
+      await refreshDepartments();
+      notifyDepartmentsUpdated();
+      toast.success('Department removed');
+    } catch (error: unknown) {
+      const ax = error as { response?: { data?: { error?: string } } };
+      toast.error(ax.response?.data?.error || 'Failed to delete department');
+    }
+  };
+
+  const companyCount = companiesTotal;
+  const responseCount = responsesTotal;
+  const companiesTotalPages = companiesTotal > 0 ? Math.ceil(companiesTotal / modalPageSize) : 1;
+  const responsesTotalPages = responsesTotal > 0 ? Math.ceil(responsesTotal / modalPageSize) : 1;
+
+  const companyName = (c: CompanyRow) => c.name || '—';
+  const companyEmail = (c: CompanyRow) => c.email || '—';
+
+  const responseCompanyLabel = (r: ResponseRow) => {
+    const cid = r.companyId;
+    if (cid && typeof cid === 'object' && cid.name) return cid.name;
+    return '—';
+  };
+
+  const handleDepartmentFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    try {
+      setUploadingDept(true);
+      const { raw } = await parseDepartmentFile(file);
+      const nonEmpty = raw.map((s) => String(s).replace(/\u00a0/g, ' ').trim()).filter(Boolean);
+      if (nonEmpty.length === 0) {
+        toast.error('No department names found in that file');
+        return;
+      }
+      const res = await departmentAPI.bulkImport(raw);
+      const { added, skippedDuplicate } = res.data;
+      await refreshDepartments();
+      notifyDepartmentsUpdated();
+
+      const parts: string[] = [];
+      if (added > 0) {
+        parts.push(`${added} department${added === 1 ? '' : 's'} added`);
+      } else {
+        parts.push('No new departments added');
+      }
+      if (skippedDuplicate > 0) {
+        parts.push(
+          `${skippedDuplicate} duplicate${skippedDuplicate === 1 ? '' : 's'} skipped (already in your list or repeated in the file)`,
+        );
+      }
+      toast.success(parts.join('. ') + '.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not read department file';
+      toast.error(msg);
+    } finally {
+      setUploadingDept(false);
+    }
   };
 
   if (loading) {
     return (
       <AdminLayout>
         <div className="min-h-screen flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
         </div>
       </AdminLayout>
     );
@@ -137,281 +240,295 @@ export default function AdminDashboard() {
 
   return (
     <AdminLayout>
-      <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-700">
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Dashboard</h1>
-            <p className="mt-2 text-slate-500 font-medium tracking-wide">
-              Overview of organization health metrics and key performance indicators
-            </p>
-          </div>
-          <div className="flex items-center space-x-3">
-            <button 
-              onClick={fetchDashboardData}
-              className="bg-white border border-slate-200 text-slate-700 px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-slate-50 transition-all flex items-center"
+      <DepartmentNameModal
+        open={deptModalOpen}
+        onClose={handleDeptModalClose}
+        onConfirm={handleDeptModalConfirm}
+        title={editingDept ? 'Edit department' : 'Add department'}
+        label={editingDept ? 'Update the name' : 'Enter department name'}
+        initialName={editingDept?.name}
+      />
+      <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-5xl mx-auto">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Dashboard</h1>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            ref={deptFileRef}
+            type="file"
+            accept=".csv,.txt,.xlsx,.xls"
+            className="hidden"
+            onChange={handleDepartmentFile}
+          />
+
+          <button
+            type="button"
+            onClick={() => {
+              setListModal('companies');
+              void loadCompaniesPage(1);
+            }}
+            className="group flex min-w-0 flex-1 basis-[200px] items-center gap-3 rounded-xl border border-slate-200/90 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50/80"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+              <Building2 className="h-5 w-5" aria-hidden />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-slate-500">Companies</span>
+              <span className="mt-0.5 block text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+                {companyCount}
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" aria-hidden />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setListModal('responses');
+              void loadResponsesPage(1);
+            }}
+            className="group flex min-w-0 flex-1 basis-[200px] items-center gap-3 rounded-xl border border-slate-200/90 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50/80"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+              <ClipboardList className="h-5 w-5" aria-hidden />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-slate-500">Responses</span>
+              <span className="mt-0.5 block text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+                {responseCount}
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" aria-hidden />
+          </button>
+
+          <button
+            type="button"
+            disabled={uploadingDept}
+            onClick={() => deptFileRef.current?.click()}
+            className="inline-flex h-[58px] shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-200/90 bg-emerald-50/90 px-5 text-sm font-medium text-emerald-900 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[200px]"
+          >
+            <FileSpreadsheet className="h-4 w-4 shrink-0" aria-hidden />
+            {uploadingDept ? 'Processing…' : 'Upload departments'}
+          </button>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 sm:px-6 py-4 border-b border-slate-100 bg-slate-50/80">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Department list</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {departments.length === 0
+                  ? 'No departments yet — upload a file or add one.'
+                  : `${departments.length} department${departments.length === 1 ? '' : 's'}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openAddDepartment}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary-600 text-white px-4 py-2 text-sm font-semibold hover:bg-primary-700 shrink-0"
             >
-              <svg className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-              Refresh
+              <Plus className="w-4 h-4" />
+              Add department
             </button>
           </div>
-        </div>
-
-        {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-          {/* Overall Health Card */}
-          <div className={`relative overflow-hidden group bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border p-8 transition-all hover:scale-[1.02] duration-300 ${overallStats ? getHealthBgColor(overallStats.overallPercentage) : 'border-slate-100'}`}>
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">
-                  Overall Health
-                </p>
-                <h3 className={`mt-3 text-5xl font-black ${overallStats ? getHealthColor(overallStats.overallPercentage) : 'text-slate-900'}`}>
-                  {overallStats && typeof overallStats.overallPercentage === 'number'
-                    ? `${overallStats.overallPercentage.toFixed(1)}%`
-                    : '--'}
-                </h3>
-              </div>
-              <div className="p-4 bg-primary-100/50 rounded-2xl text-primary-600 group-hover:scale-110 transition-transform duration-300">
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                </svg>
-              </div>
-            </div>
-            <div className="mt-8 flex items-center space-x-2">
-              <div className="flex-1 bg-slate-200/50 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-1000 ${
-                    overallStats && overallStats.overallPercentage >= 80
-                      ? 'bg-emerald-500'
-                      : overallStats && overallStats.overallPercentage >= 60
-                      ? 'bg-primary-500'
-                      : overallStats && overallStats.overallPercentage >= 40
-                      ? 'bg-amber-500'
-                      : 'bg-rose-500'
-                  }`}
-                  style={{
-                    width: overallStats && typeof overallStats.overallPercentage === 'number'
-                      ? `${overallStats.overallPercentage}%`
-                      : '0%',
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-            {[
-            { label: 'Companies', value: companiesCount, sub: 'Registered orgs', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a 2 2 0 00-2-2H7a 2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a 1 1 0 011-1h2a 1 1 0 011 1v5m-4 0h4" />, color: 'primary' },
-            { label: 'Responses', value: overallStats ? overallStats.totalResponses : 0, sub: 'Survey submissions', icon: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a 2 2 0 01-2-2V5a 2 2 0 012-2h5.586a 1 1 0 01.707.293l5.414 5.414a 1 1 0 01.293.707V19a 2 2 0 01-2 2z" />, color: 'emerald' },
-          ].map((stat, i) => (
-            <div key={i} className="group bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 p-8 transition-all hover:scale-[1.02] duration-300">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest pl-1">{stat.label}</p>
-                  <h3 className="mt-3 text-5xl font-black text-slate-900">{stat.value}</h3>
-                  <p className="mt-3 text-[13px] text-slate-400 font-medium">{stat.sub}</p>
-                </div>
-                <div className={`p-4 bg-${stat.color === 'primary' ? 'primary' : stat.color}-50 rounded-2xl text-${stat.color === 'primary' ? 'primary' : stat.color}-600 group-hover:scale-110 transition-transform duration-300`}>
-                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">{stat.icon}</svg>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Charts Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Rating Distribution - Pie Chart */}
-          <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 p-8">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-xl font-bold text-slate-900">Rating Distribution</h2>
-              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" /></svg>
-              </div>
-            </div>
-            {ratingData.length > 0 ? (
-              <div className="h-[350px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={ratingData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={80}
-                      outerRadius={120}
-                      paddingAngle={5}
-                      dataKey="value"
-                    >
-                      {ratingData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} strokeWidth={0} />
-                      ))}
-                    </Pie>
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' }}
-                      formatter={(val: unknown, name: unknown, entry: unknown) => {
-                        const value = typeof val === 'number' ? val : 0;
-                        const entryObj = entry as { payload?: { percentage?: number } };
-                        const percentage = entryObj?.payload?.percentage || 0;
-                        return [`${value} votes (${percentage.toFixed(1)}%)`, typeof name === 'string' ? name : ''];
-                      }}
-                    />
-                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
+          <div
+            className="scrollbar-none max-h-[20rem] overflow-y-auto"
+            aria-label="Department list"
+          >
+            {departments.length === 0 ? (
+              <p className="px-6 py-10 text-center text-sm text-slate-500">No departments in the list.</p>
             ) : (
-              <div className="h-[350px] flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-                <svg className="w-12 h-12 mb-3 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                <p className="font-medium">No rating data available yet</p>
-              </div>
-            )}
-          </div>
-
-          {/* Rating Summary - Bar Chart */}
-          <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 p-8">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-xl font-bold text-slate-900">Health Breakdown</h2>
-              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-              </div>
-            </div>
-            {ratingData.length > 0 ? (
-              <div className="h-[350px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={ratingData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                    <XAxis 
-                      dataKey="name" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fill: '#64748B', fontSize: 12 }}
-                      padding={{ left: 10, right: 10 }}
-                    />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748B', fontSize: 12 }} />
-                    <Tooltip 
-                      cursor={{ fill: '#F8FAFC', radius: 12 }}
-                      contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px rgba(0,0,0,0.1)' }}
-                    />
-                    <Bar dataKey="value" radius={[8, 8, 0, 0]} maxBarSize={40}>
-                      {ratingData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="h-[350px] flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-                <svg className="w-12 h-12 mb-3 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16" /></svg>
-                <p className="font-medium">Analysis pending responses</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Section Performance */}
-        <div className="bg-white rounded-[2rem] shadow-xl shadow-slate-200/40 border border-slate-100 p-10">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">Parameter Performance</h2>
-              <p className="text-slate-500 text-sm mt-1">Ranking of the top 10 diagnostic sections by score</p>
-            </div>
-            <div className="w-12 h-12 bg-primary-50 rounded-2xl flex items-center justify-center text-primary-600">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-            </div>
-          </div>
-          {sectionPerformanceData.length > 0 ? (
-            <div className="h-[450px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={sectionPerformanceData} layout="vertical" margin={{ left: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
-                  <XAxis type="number" domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: '#64748B' }} />
-                  <YAxis 
-                    dataKey="name" 
-                    type="category" 
-                    width={180} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#1E293B', fontWeight: 600, fontSize: 13 }}
-                  />
-                  <Tooltip 
-                    cursor={{ fill: '#F8FAFC', radius: 12 }}
-                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 50px rgba(0,0,0,0.1)' }}
-                    formatter={(val: unknown) => {
-                      const value = typeof val === 'number' ? val : 0;
-                      return [`${value}%`, 'Score'];
-                    }}
-                  />
-                  <Bar dataKey="percentage" fill="url(#colorBar)" radius={[0, 8, 8, 0]} maxBarSize={30}>
-                    <defs>
-                      <linearGradient id="colorBar" x1="0" y1="0" x2="1" y2="0">
-                        <stop offset="0%" stopColor="#818CF8" />
-                        <stop offset="100%" stopColor="#3b66f5" />
-                      </linearGradient>
-                    </defs>
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="h-[400px] flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-               <p className="font-semibold text-lg">Detailed metrics will appear here</p>
-               <p className="text-sm mt-1">Collect responses to see section-wise analytics</p>
-            </div>
-          )}
-        </div>
-
-        {/* Insights Section */}
-        {overallStats && (overallStats.bestSection || (overallStats.summaryInsights && overallStats.summaryInsights.length > 0)) && (
-          <div className="bg-slate-900 rounded-[2.5rem] p-10 text-white relative overflow-hidden shadow-2xl">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-primary-500/20 rounded-full blur-[100px]" />
-            <div className="absolute bottom-0 left-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-[100px]" />
-            
-            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-3 gap-12">
-              <div className="lg:col-span-1 border-b lg:border-b-0 lg:border-r border-slate-700 pb-8 lg:pb-0 lg:pr-12">
-                <div className="inline-flex items-center px-4 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-bold uppercase tracking-widest mb-6 border border-emerald-500/20">
-                   Intelligence Insight
-                </div>
-                <h2 className="text-4xl font-extrabold tracking-tight mb-4">Diagnostic <span className="text-primary-400 text-glow">Clarity</span></h2>
-                <p className="text-slate-400 text-lg leading-relaxed">AI-driven summary of your organizational pulse based on latest collective sentiment.</p>
-              </div>
-
-              <div className="lg:col-span-2 space-y-8">
-                {overallStats.bestSection && (
-                  <div className="group rounded-3xl bg-slate-800/50 p-6 border border-slate-700 hover:border-emerald-500/50 transition-all duration-300">
-                    <div className="flex items-center mb-4">
-                       <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400 mr-4">
-                          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
-                       </div>
-                       <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest">Growth Champion</p>
+              <ul className="divide-y divide-slate-100">
+                {departments.map((d) => (
+                  <li
+                    key={d._id}
+                    className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 hover:bg-slate-50/80"
+                  >
+                    <span className="text-sm font-medium text-slate-900 truncate">{d.name}</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openEditDepartment(d)}
+                        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-primary-700 hover:bg-primary-50"
+                        aria-label={`Edit ${d.name}`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDepartment(d._id, d.name)}
+                        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                        aria-label={`Delete ${d.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Delete
+                      </button>
                     </div>
-                    <h4 className="text-2xl font-bold flex items-baseline">
-                      {overallStats.bestSection.sectionName}
-                      <span className="ml-4 text-emerald-400 text-sm font-black border-l border-slate-700 pl-4">
-                        {typeof overallStats.bestSection.percentage === 'number'
-                          ? overallStats.bestSection.percentage.toFixed(1)
-                          : '0.0'}% Positive
-                      </span>
-                    </h4>
-                    <p className="text-slate-400 mt-2 text-sm">This parameter shows the highest level of organizational maturity and employee confidence.</p>
-                  </div>
-                )}
-                
-                {overallStats.summaryInsights && overallStats.summaryInsights.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {overallStats.summaryInsights.map((insight, idx) => (
-                      <div key={idx} className="flex items-start p-5 bg-slate-800/30 rounded-2xl border border-slate-700/50 hover:bg-slate-800 transition-colors">
-                        <div className="w-2 h-2 rounded-full bg-primary-500 mt-1.5 mr-4 ring-4 ring-primary-500/20" />
-                        <p className="text-sm text-slate-300 leading-relaxed font-medium">{insight}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        )}
+        </div>
       </div>
+
+      {listModal && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="list-modal-title"
+        >
+          <div className="relative flex min-h-0 w-full max-w-3xl max-h-[85vh] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+              <h2 id="list-modal-title" className="text-lg font-bold text-slate-900">
+                {listModal === 'companies' ? 'All companies' : 'Completed users'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setListModal(null)}
+                className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <div className="scrollbar-none max-h-[22rem] min-h-0 overflow-y-auto p-0">
+              {listModal === 'companies' && (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr className="text-left text-slate-600">
+                      <th className="px-6 py-3 font-semibold">Name</th>
+                      <th className="px-6 py-3 font-semibold">Email</th>
+                      <th className="px-6 py-3 font-semibold">Industry</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {companies.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-6 py-8 text-center text-slate-500">
+                          No companies yet
+                        </td>
+                      </tr>
+                    ) : (
+                      companies.map((c) => (
+                        <tr key={c._id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className="px-6 py-3 font-medium text-slate-900">{companyName(c)}</td>
+                          <td className="px-6 py-3 text-slate-600">{companyEmail(c)}</td>
+                          <td className="px-6 py-3 text-slate-600">{c.industry || '—'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              )}
+              {listModal === 'responses' && (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr className="text-left text-slate-600">
+                      <th className="px-6 py-3 font-semibold">Company</th>
+                      <th className="px-6 py-3 font-semibold">Email</th>
+                      <th className="px-6 py-3 font-semibold">Department</th>
+                      <th className="px-6 py-3 font-semibold">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {responses.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                          No responses yet
+                        </td>
+                      </tr>
+                    ) : (
+                      responses.map((r) => (
+                        <tr key={r._id} className="border-t border-slate-100 hover:bg-slate-50/80">
+                          <td className="px-6 py-3 font-medium text-slate-900">
+                            {responseCompanyLabel(r)}
+                          </td>
+                          <td className="px-6 py-3 text-slate-600">
+                            {r.employeeEmail || '—'}
+                          </td>
+                          <td className="px-6 py-3 text-slate-600">{r.department || '—'}</td>
+                          <td className="px-6 py-3 text-slate-500 whitespace-nowrap">
+                            {r.submittedAt
+                              ? new Date(r.submittedAt).toLocaleDateString(undefined, {
+                                  year: 'numeric',
+                                  month: 'short',
+                                  day: '2-digit',
+                                })
+                              : '—'}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {listModal === 'companies' && (
+              <div className="border-t border-slate-100 px-6 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white">
+                <p className="text-xs text-slate-500">
+                  Page <span className="font-medium text-slate-700">{companiesModalPage}</span> of{' '}
+                  <span className="font-medium text-slate-700">{companiesTotalPages}</span>
+                </p>
+                <div className="inline-flex items-center justify-center rounded-full border border-slate-200 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => void loadCompaniesPage(Math.max(1, companiesModalPage - 1))}
+                    disabled={companiesModalPage <= 1 || modalLoading}
+                    className="px-3 py-1.5 text-xs font-medium disabled:text-slate-300 disabled:bg-slate-50 hover:bg-slate-50"
+                  >
+                    Previous
+                  </button>
+                  <span className="px-3 py-1.5 border-l border-r border-slate-200 text-xs">
+                    Page <span className="font-semibold">{companiesModalPage}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void loadCompaniesPage(Math.min(companiesTotalPages, companiesModalPage + 1))}
+                    disabled={companiesModalPage >= companiesTotalPages || modalLoading}
+                    className="px-3 py-1.5 text-xs font-medium disabled:text-slate-300 disabled:bg-slate-50 hover:bg-slate-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {listModal === 'responses' && (
+              <div className="border-t border-slate-100 px-6 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white">
+                <p className="text-xs text-slate-500">
+                  Page <span className="font-medium text-slate-700">{responsesModalPage}</span> of{' '}
+                  <span className="font-medium text-slate-700">{responsesTotalPages}</span>
+                </p>
+                <div className="inline-flex items-center justify-center rounded-full border border-slate-200 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => void loadResponsesPage(Math.max(1, responsesModalPage - 1))}
+                    disabled={responsesModalPage <= 1 || modalLoading}
+                    className="px-3 py-1.5 text-xs font-medium disabled:text-slate-300 disabled:bg-slate-50 hover:bg-slate-50"
+                  >
+                    Previous
+                  </button>
+                  <span className="px-3 py-1.5 border-l border-r border-slate-200 text-xs">
+                    Page <span className="font-semibold">{responsesModalPage}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadResponsesPage(Math.min(responsesTotalPages, responsesModalPage + 1))
+                    }
+                    disabled={responsesModalPage >= responsesTotalPages || modalLoading}
+                    className="px-3 py-1.5 text-xs font-medium disabled:text-slate-300 disabled:bg-slate-50 hover:bg-slate-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }

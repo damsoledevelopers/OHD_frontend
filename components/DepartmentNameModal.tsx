@@ -8,6 +8,8 @@ type DepartmentNameModalProps = {
   title?: string;
   label?: string;
   placeholder?: string;
+  /** When set (e.g. edit mode), the input is pre-filled when the modal opens. */
+  initialName?: string;
   onClose: () => void;
   onConfirm: (name: string) => void;
 };
@@ -17,6 +19,7 @@ export default function DepartmentNameModal({
   title = 'Add department',
   label = 'Enter department name',
   placeholder = 'Department name',
+  initialName,
   onClose,
   onConfirm,
 }: DepartmentNameModalProps) {
@@ -24,9 +27,12 @@ export default function DepartmentNameModal({
 
   useEffect(() => {
     if (!open) return;
+    if (inputRef.current) {
+      inputRef.current.value = initialName ?? '';
+    }
     const t = window.setTimeout(() => inputRef.current?.focus(), 50);
     return () => window.clearTimeout(t);
-  }, [open]);
+  }, [open, initialName]);
 
   if (!open) return null;
 

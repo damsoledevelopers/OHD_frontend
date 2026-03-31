@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
-import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AdminLayout from '@/components/AdminLayout';
 import toast from 'react-hot-toast';
 import { questionPaperAPI } from '@/lib/apiClient';
+import { ChevronDown } from 'lucide-react';
 
 interface Question {
   id: number;
@@ -50,22 +49,21 @@ export default function SectionQuestionsPage() {
   const sectionIndex = Number(params.sectionIndex);
 
   const [pillars, setPillars] = useState<Pillar[]>([]);
-  const [questionTextInput, setQuestionTextInput] = useState('');
-  const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
-  const [showQuestionModal, setShowQuestionModal] = useState(false);
-
-  const idCounterRef = useRef(1);
+  const [openPillars, setOpenPillars] = useState<Record<number, boolean>>({});
+  const [activeQuestionId, setActiveQuestionId] = useState<number | null>(null);
+  const [answers, setAnswers] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const nextId = () => {
-    const nextIdValue = idCounterRef.current;
-    idCounterRef.current += 1;
-    return nextIdValue;
-  };
 
   const currentPillar = pillars[pillarIndex] ?? null;
   const currentSection = currentPillar?.sections[sectionIndex] ?? null;
+  const questions = currentSection?.questions ?? [];
+
+  const answeredCount = useMemo(
+    () => questions.filter((q) => typeof answers[q.id] === 'number').length,
+    [answers, questions],
+  );
+
+  const sectionProgressText = `${answeredCount} / ${questions.length || 0}`;
 
   useEffect(() => {
     if (Number.isNaN(pillarIndex) || Number.isNaN(sectionIndex)) {
@@ -82,24 +80,27 @@ export default function SectionQuestionsPage() {
         const res = await questionPaperAPI.getDraft();
         const remotePillars: RemotePillar[] = res.data?.pillars || [];
 
-        let counter = 1;
-        const mapId = () => counter++;
-
+        let idCounter = 1;
         const mappedPillars: Pillar[] = remotePillars.map((p) => ({
-          id: mapId(),
+          id: idCounter++,
           name: p.name,
           sections: (p.sections || []).map((s) => ({
-            id: mapId(),
+            id: idCounter++,
             name: s.name,
             questions: (s.questions || []).map((q) => ({
-              id: mapId(),
+              id: idCounter++,
               text: q.text,
             })),
           })),
         }));
 
         setPillars(mappedPillars);
-        idCounterRef.current = counter;
+        setOpenPillars(
+          mappedPillars.reduce<Record<number, boolean>>((acc, _, idx) => {
+            acc[idx] = idx === pillarIndex;
+            return acc;
+          }, {}),
+        );
       } catch (error: unknown) {
         console.error('Failed to load question paper draft', error);
         const message =
@@ -113,315 +114,197 @@ export default function SectionQuestionsPage() {
     loadDraft();
   }, []);
 
-  const persistDraft = async (nextPillars: Pillar[]) => {
-    try {
-      setSaving(true);
-      const payload = {
-        pillars: nextPillars.map((p) => ({
-          name: p.name,
-          sections: p.sections.map((s) => ({
-            name: s.name,
-            questions: s.questions.map((q) => ({ text: q.text })),
-          })),
-        })),
-      };
-      await questionPaperAPI.saveDraft(payload);
-    } catch (error: unknown) {
-      console.error('Failed to save draft', error);
-      const message =
-        error instanceof Error ? error.message : 'Failed to save question paper';
-      toast.error(message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleAddQuestion = () => {
-    if (!currentPillar || !currentSection || !questionTextInput.trim()) {
-      toast.error('Please enter question text');
-      return;
-    }
-    const id = nextId();
-    setPillars((prev) => {
-      const next = prev.map((p, pIndex) =>
-        pIndex === pillarIndex
-          ? {
-              ...p,
-              sections: p.sections.map((s, sIndex) =>
-                sIndex === sectionIndex
-                  ? {
-                      ...s,
-                      questions: [
-                        ...s.questions,
-                        { id, text: questionTextInput.trim() },
-                      ],
-                    }
-                  : s,
-              ),
-            }
-          : p,
-      );
-      void persistDraft(next);
-      return next;
-    });
-    setQuestionTextInput('');
-    setShowQuestionModal(false);
-    toast.success('Question added');
-  };
-
-  const handleUpdateQuestion = () => {
-    if (!currentPillar || !currentSection || !editingQuestionId) return;
-    if (!questionTextInput.trim()) {
-      toast.error('Please enter question text');
-      return;
-    }
-    setPillars((prev) => {
-      const next = prev.map((p, pIndex) =>
-        pIndex === pillarIndex
-          ? {
-              ...p,
-              sections: p.sections.map((s, sIndex) =>
-                sIndex === sectionIndex
-                  ? {
-                      ...s,
-                      questions: s.questions.map((q) =>
-                        q.id === editingQuestionId
-                          ? { ...q, text: questionTextInput.trim() }
-                          : q,
-                      ),
-                    }
-                  : s,
-              ),
-            }
-          : p,
-      );
-      void persistDraft(next);
-      return next;
-    });
-    setEditingQuestionId(null);
-    setQuestionTextInput('');
-    setShowQuestionModal(false);
-    toast.success('Question updated');
-  };
-
-  const handleDeleteQuestion = (id: number) => {
-    if (!currentPillar || !currentSection) return;
-    setPillars((prev) => {
-      const next = prev.map((p, pIndex) =>
-        pIndex === pillarIndex
-          ? {
-              ...p,
-              sections: p.sections.map((s, sIndex) =>
-                sIndex === sectionIndex
-                  ? {
-                      ...s,
-                      questions: s.questions.filter((q) => q.id !== id),
-                    }
-                  : s,
-              ),
-            }
-          : p,
-      );
-      void persistDraft(next);
-      return next;
-    });
-    toast.success('Question deleted');
-  };
-
-  const resetQuestionForm = () => {
-    setEditingQuestionId(null);
-    setQuestionTextInput('');
-    setShowQuestionModal(false);
-  };
-
-  const questions = currentSection?.questions ?? [];
+  const ratingLabels = [
+    'Strongly Disagree',
+    'Disagree',
+    'Neutral',
+    'Agree',
+    'Strongly Agree',
+  ];
 
   return (
     <AdminLayout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-start gap-4 min-w-0">
-            <Image
-              src="/ohdlogo.png"
-              alt="OHD Logo"
-              width={48}
-              height={48}
-              className="w-12 h-12 object-contain rounded-lg border border-gray-200 bg-white shrink-0"
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-xs text-gray-500 mb-1">
-                <Link href="/admin/question-paper" className="hover:text-primary-600">
-                  Question Paper
-                </Link>
-                <span>/</span>
-                {currentPillar ? (
-                  <Link
-                    href={`/admin/question-paper/${pillarIndex}`}
-                    className="hover:text-primary-600"
-                  >
-                    {currentPillar.name}
-                  </Link>
-                ) : (
-                  <span>Pillar</span>
-                )}
-                <span>/</span>
-                <span>Questions</span>
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-lg font-semibold text-gray-900">Question Paper</h1>
+            <div className="flex items-center gap-2 text-xs">
+              <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                Solved {answeredCount}
               </div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {currentSection ? currentSection.name : 'Loading section...'}
-              </h1>
-              {currentPillar && (
-                <p className="text-sm text-gray-500 mt-1">
-                  Pillar: <span className="font-medium">{currentPillar.name}</span>
-                </p>
-              )}
-              <p className="text-xs text-gray-500 mt-1">
-                Add and manage questions for this section. Changes are saved as draft automatically.
-              </p>
+              <div className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 font-semibold text-amber-700">
+                Pending {Math.max(questions.length - answeredCount, 0)}
+              </div>
+              <div className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+                Progress {questions.length ? Math.round((answeredCount / questions.length) * 100) : 0}%
+              </div>
             </div>
           </div>
         </div>
 
         {loading && (
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 text-sm text-gray-500">
+          <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-gray-500">
             Loading questions...
           </div>
         )}
 
         {!loading && (!currentPillar || !currentSection) && (
-          <div className="bg-white border border-red-100 rounded-xl shadow-sm p-6 text-sm text-red-600">
-            Section not found. It may have been removed. Go back to the{' '}
-            <Link
-              href={currentPillar ? `/admin/question-paper/${pillarIndex}` : '/admin/question-paper'}
-              className="underline"
-            >
-              previous page
-            </Link>
-            .
+          <div className="rounded-xl border border-red-100 bg-white p-6 text-sm text-red-600">
+            Section not found. Please go back to question paper and choose a valid section.
           </div>
         )}
 
         {!loading && currentPillar && currentSection && (
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 sm:p-5 flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-semibold text-gray-900">Questions</h2>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  Add and manage questions for this section.
-                </p>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)_240px]">
+            <aside className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
+              <p className="mb-3 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                Question Paper
+              </p>
+              <div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">
+                {pillars.map((pillar, pIndex) => {
+                  const isOpen = openPillars[pIndex];
+                  return (
+                    <div key={pillar.id} className="rounded-lg border border-gray-200">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenPillars((prev) => ({ ...prev, [pIndex]: !prev[pIndex] }))
+                        }
+                        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                      >
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-700">
+                          {pillar.name}
+                        </span>
+                        <ChevronDown
+                          className={`h-4 w-4 text-gray-500 transition-transform ${
+                            isOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                      {isOpen && (
+                        <div className="space-y-1 border-t border-gray-100 p-2">
+                          {pillar.sections.map((section, sIndex) => {
+                            const isActive = pIndex === pillarIndex && sIndex === sectionIndex;
+                            return (
+                              <button
+                                key={section.id}
+                                type="button"
+                                onClick={() => router.push(`/admin/question-paper/${pIndex}/${sIndex}`)}
+                                className={`w-full rounded-md px-2 py-2 text-left text-xs transition ${
+                                  isActive
+                                    ? 'bg-primary-50 text-primary-700 ring-1 ring-primary-200'
+                                    : 'text-gray-600 hover:bg-gray-50'
+                                }`}
+                              >
+                                <p className="font-medium">{section.name}</p>
+                                <p className="mt-0.5 text-[10px] text-gray-400">
+                                  {section.questions.length} questions
+                                </p>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingQuestionId(null);
-                  setQuestionTextInput('');
-                  setShowQuestionModal(true);
-                }}
-                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-primary-600 text-white text-[11px] font-semibold hover:bg-primary-700"
-              >
-                Add question
-              </button>
-            </div>
+            </aside>
 
-            <div className="flex items-center justify-between text-[11px] text-gray-500">
-              <span>Total questions: {questions.length}</span>
-              <span>
-                Auto-saved draft • {saving ? 'Saving…' : 'Draft up to date'}
-              </span>
-            </div>
+            <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+                Pillar {pillarIndex + 1} (P{pillarIndex + 1}) : {currentPillar.name}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Parameter {sectionIndex + 1} (PA {sectionIndex + 1}) : {currentSection.name}
+                </h2>
+                <span className="rounded-md border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-700">
+                  Section progress: {sectionProgressText}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-gray-500">
+                Tap a question to activate the rating scale on the right. Only one question is active at a time.
+              </p>
 
-            <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 overflow-y-auto max-h-[440px]">
-              {questions.length === 0 && (
-                <div className="p-4 text-sm text-gray-500">
-                  No questions in this section yet. Use &quot;Add question&quot; to start building your set.
-                </div>
-              )}
-              {questions.map((q, index) => (
-                <div
-                  key={q.id}
-                  className="p-4 flex items-start justify-between gap-3 hover:bg-gray-50/60"
-                >
-                  <div className="flex-1">
-                    <p className="text-[11px] text-gray-400 mb-1">Q{index + 1}</p>
-                    <p className="text-sm text-gray-900 whitespace-pre-line">{q.text}</p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-1">
+              <div className="mt-4 space-y-3">
+                {questions.map((q, index) => {
+                  const isActive = activeQuestionId === q.id;
+                  const value = answers[q.id];
+                  return (
                     <button
+                      key={q.id}
                       type="button"
+                      onClick={() => setActiveQuestionId(q.id)}
+                      className={`w-full rounded-xl border px-4 py-3 text-left transition ${
+                        isActive
+                          ? 'border-primary-300 bg-primary-50/60 shadow-sm'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-xs font-semibold text-gray-700">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-800">{q.text}</p>
+                          <p className="mt-1 text-xs text-gray-500">
+                            {typeof value === 'number'
+                              ? `Selected: ${ratingLabels[value - 1]}`
+                              : 'Not answered yet'}
+                          </p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+                {questions.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-500">
+                    No questions found in this section.
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <aside className="h-fit rounded-2xl border border-gray-200 bg-white p-3 shadow-sm">
+              <p className="mb-2 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                Your response
+              </p>
+              <p className="mb-3 text-xs text-gray-500">
+                {activeQuestionId ? 'Select a rating' : 'Select a question'}
+              </p>
+              <div className="space-y-2">
+                {ratingLabels.map((label, idx) => {
+                  const value = idx + 1;
+                  const isSelected =
+                    activeQuestionId !== null && answers[activeQuestionId] === value;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      disabled={activeQuestionId === null}
                       onClick={() => {
-                        setEditingQuestionId(q.id);
-                        setQuestionTextInput(q.text);
-                        setShowQuestionModal(true);
+                        if (activeQuestionId === null) return;
+                        setAnswers((prev) => ({ ...prev, [activeQuestionId]: value }));
                       }}
-                      className="px-2 py-1 rounded-md text-[11px] border border-gray-200 text-gray-700 hover:bg-gray-50"
+                      className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition ${
+                        isSelected
+                          ? 'border-primary-300 bg-primary-50 text-primary-700'
+                          : 'border-gray-200 text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60'
+                      }`}
                     >
-                      Edit
+                      <span className="flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 bg-white text-[11px] font-semibold">
+                        {value}
+                      </span>
+                      <span className="font-medium">{label}</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteQuestion(q.id)}
-                      className="px-2 py-1 rounded-md text-[11px] border border-red-200 text-red-600 hover:bg-red-50"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                  );
+                })}
+              </div>
+            </aside>
           </div>
         )}
       </div>
-
-      {/* Question modal */}
-      {showQuestionModal && currentPillar && currentSection && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900">
-                {editingQuestionId ? 'Edit question' : 'Add question'}
-              </h2>
-              <button
-                type="button"
-                onClick={resetQuestionForm}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">
-              Pillar: {currentPillar.name} • Section: {currentSection.name}
-            </p>
-            <div className="space-y-2">
-              <label className="block text-xs font-medium text-gray-700">
-                Question text
-              </label>
-              <textarea
-                value={questionTextInput}
-                onChange={(e) => setQuestionTextInput(e.target.value)}
-                placeholder="Enter question text"
-                rows={4}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 resize-none"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={resetQuestionForm}
-                className="px-3 py-2 rounded-lg border border-gray-300 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={editingQuestionId ? handleUpdateQuestion : handleAddQuestion}
-                className="px-4 py-2 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700"
-              >
-                {editingQuestionId ? 'Update question' : 'Add question'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </AdminLayout>
   );
 }

@@ -1,18 +1,22 @@
 'use client';
 
-import { Suspense } from 'react';
-import StartSurveyGateContent from './StartSurveyGateContent';
+import { useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function StartSurveyGatePage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-          <p className="text-gray-600">Loading…</p>
-        </div>
-      }
-    >
-      <StartSurveyGateContent />
-    </Suspense>
-  );
+/**
+ * Backward-compat redirect:
+ * Some links still point to `/survey/start`.
+ * Redirect to `/survey` while preserving full query string.
+ */
+export default function SurveyStartRedirect() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const qs = searchParams.toString();
+    router.replace(`/survey${qs ? `?${qs}` : ''}`);
+  }, [router, searchParams]);
+
+  return null;
 }
+

@@ -9,6 +9,8 @@ export const publicAPI = {
       /** @deprecated same as publicAppBaseUrl */
       surveyBaseUrl: string | null;
     }>('/public/config'),
+  /** Global department list (survey / company forms; no auth). */
+  getDepartments: () => api.get<{ departments: string[] }>('/public/departments'),
 };
 
 // Auth APIs
@@ -23,10 +25,15 @@ export const authAPI = {
 // Company APIs
 export const companyAPI = {
   getAll: () => api.get('/companies'),
+  getPaginated: (params: { page: number; limit: number }) =>
+    api.get('/companies', { params }),
   getWithSurvey: () => api.get('/companies/with-survey'),
   getById: (id: string) => api.get(`/companies/${id}`),
   // Public read-only endpoint for survey participants; does not require admin auth.
-  getPublicById: (id: string) => api.get(`/companies/public/${id}`),
+  getPublicById: (id: string, employeeEmail?: string) =>
+    api.get(`/companies/public/${id}`, {
+      params: employeeEmail ? { employeeEmail } : undefined,
+    }),
   getEmails: (id: string) => api.get(`/companies/${id}/emails`),
   create: (data: Record<string, unknown>) => api.post('/companies', data),
   // Do not set Content-Type: axios adds multipart/form-data with the correct boundary for FormData.
@@ -39,10 +46,30 @@ export const companyAPI = {
     api.post('/companies/public', formData),
 };
 
+/** Admin-only department registry (MongoDB). */
+export const departmentAPI = {
+  list: () =>
+    api.get<{ departments: Array<{ _id: string; name: string }> }>('/departments'),
+  create: (name: string) => api.post<{ department: { _id: string; name: string } }>('/departments', { name }),
+  update: (id: string, name: string) =>
+    api.put<{ department: { _id: string; name: string } }>(`/departments/${id}`, { name }),
+  delete: (id: string) => api.delete<{ ok: boolean }>(`/departments/${id}`),
+  bulkImport: (names: string[]) =>
+    api.post<{ added: number; skippedDuplicate: number; departments: string[] }>(
+      '/departments/bulk-import',
+      { names },
+    ),
+};
+
 // Response APIs
 export const responseAPI = {
+  getAll: () => api.get('/responses/all'),
+  getAllPaginated: (params: { page: number; limit: number }) =>
+    api.get('/responses/all', { params }),
   getByCompany: (companyId: string) => api.get(`/responses/companies/${companyId}`),
   submit: (data: Record<string, unknown>) => api.post('/responses', data),
+  startExam: (data: { companyId: string; employeeEmail: string; department?: string }) =>
+    api.post('/responses/start', data),
   getCompanySummary: (companyId: string) => api.get(`/responses/companies/${companyId}/summary`),
 };
 

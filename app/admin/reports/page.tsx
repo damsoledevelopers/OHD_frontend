@@ -103,6 +103,12 @@ interface EmployeeResponseLite {
   employeeName?: string;
 }
 
+function isValidEmail(raw: string | undefined | null): boolean {
+  const s = String(raw ?? '').trim().toLowerCase();
+  // UI-level guard: show only values that look like real emails.
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
 const PIE_COLORS = ['#059669', '#4338CA', '#FBBF24', '#F97316', '#DC2626'];
 
 /** Matches manual Excel report: columns SD, D, N, A, SA (storage uses E,D,C,B,A). */
@@ -129,14 +135,45 @@ type OhiBand = {
   max: number;
   label: string;
   color: string;
+  healthStatus: string;
 };
 
 const OHI_BANDS: OhiBand[] = [
-  { min: 90, max: 100, label: '90% - 100%', color: '#059669' },
-  { min: 80, max: 89.9, label: '80% - 89.9%', color: '#4338CA' },
-  { min: 70, max: 79.9, label: '70% - 79.9%', color: '#FBBF24' },
-  { min: 60, max: 69.9, label: '60% - 69.9%', color: '#F97316' },
-  { min: 0, max: 59.9, label: 'Below 60%', color: '#DC2626' },
+  {
+    min: 90,
+    max: 100,
+    label: '90% - 100%',
+    healthStatus: 'Operationally Secure & Governance Mature',
+    color: '#059669',
+  },
+  {
+    min: 80,
+    max: 89.9,
+    label: '80% - 89.9%',
+    healthStatus: 'Stable - Continuous Monitoring Required',
+    color: '#4338CA',
+  },
+  {
+    min: 70,
+    max: 79.9,
+    label: '70% - 79.9%',
+    healthStatus: 'Structural Stability Weakening - Corrective Action Required',
+    color: '#FBBF24',
+  },
+  {
+    min: 60,
+    max: 69.9,
+    label: '60% - 69.9%',
+    healthStatus: 'High Risk Operational Zone - War Room Activation Required',
+    color: '#F97316',
+  },
+  {
+    min: 0,
+    max: 59.9,
+    label: 'Below 60%',
+    healthStatus: 'SOS - Critical Organizational Distress',
+    color: '#DC2626',
+  },
 ];
 
 function getOriColorByPercentage(value: number): string {
@@ -145,6 +182,24 @@ function getOriColorByPercentage(value: number): string {
   if (value >= 70) return '#FBBF24'; // Yellow
   if (value >= 60) return '#F97316'; // Orange
   return '#DC2626'; // Red
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace('#', '').trim();
+  const fullHex =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : normalized;
+
+  const num = parseInt(fullHex, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 
@@ -173,23 +228,25 @@ function ReportsPageContent() {
   const [completedFallbackUsers, setCompletedFallbackUsers] = useState<string[]>([]);
   const [loadingCompletedFallback, setLoadingCompletedFallback] = useState(false);
 
-  const fetchCompanySummary = useCallback(async (companyId: string) => {
+  const fetchCompanySummary = useCallback(async (companyId: string): Promise<CompanySummary | null> => {
     const requestId = ++summaryRequestSeq.current;
     try {
       setLoadingSummary(true);
       const res = await responseAPI.getCompanySummary(companyId);
-      if (requestId !== summaryRequestSeq.current) return;
-      setCompanySummary(res.data || null);
+      if (requestId !== summaryRequestSeq.current) return null;
+      const summary = res.data || null;
+      setCompanySummary(summary);
+      return summary;
     } catch (error: unknown) {
-      if (requestId !== summaryRequestSeq.current) return;
+      if (requestId !== summaryRequestSeq.current) return null;
       console.error('Failed to load company summary', error);
       const message =
         error instanceof Error ? error.message : 'Failed to load company response summary';
       toast.error(message);
       setCompanySummary(null);
+      return null;
     } finally {
-      if (requestId !== summaryRequestSeq.current) return;
-      setLoadingSummary(false);
+      if (requestId === summaryRequestSeq.current) setLoadingSummary(false);
     }
   }, []);
 
@@ -291,12 +348,16 @@ function ReportsPageContent() {
 
   useEffect(() => {
     let cancelled = false;
+    const hasValidCompletedEmails =
+      (companySummary?.completedEmails ?? []).some(isValidEmail);
+    const hasAnyCompletedUsers = (companySummary?.completedUsers ?? []).some((u) => String(u ?? '').trim().length > 0);
     const shouldFetchCompletedFallback =
       !!selectedCompany &&
       activeUserList === 'completed' &&
       !!companySummary &&
       (companySummary.completedCount ?? 0) > 0 &&
-      (companySummary.completedEmails?.length ?? 0) === 0;
+      !hasValidCompletedEmails &&
+      !hasAnyCompletedUsers;
 
     if (!shouldFetchCompletedFallback) {
       setCompletedFallbackUsers([]);
@@ -313,9 +374,7 @@ function ReportsPageContent() {
         const unique = new Set<string>();
         responses.forEach((r, idx) => {
           const email = (r.employeeEmail || '').trim().toLowerCase();
-          const name = (r.employeeName || '').trim();
-          const label = email || name || `Response ${idx + 1}`;
-          unique.add(label);
+          if (isValidEmail(email)) unique.add(email);
         });
         setCompletedFallbackUsers(Array.from(unique));
       } catch (error) {
@@ -546,6 +605,23 @@ function ReportsPageContent() {
       }
     >();
 
+    // Initialize every pillar so the chart always renders the full pillar set,
+    // even if a pillar has no section-level data in the current scope.
+    questionPillars.forEach((p, pIdx) => {
+      const pillarCode = `P${pIdx + 1}`;
+      if (countsByPillar.has(pillarCode)) return;
+      countsByPillar.set(pillarCode, {
+        pillarCode,
+        pillarName: (p.name || '').trim() || pillarCode,
+        SD: 0,
+        D: 0,
+        N: 0,
+        A: 0,
+        SA: 0,
+        total: 0,
+      });
+    });
+
     scopedSections.forEach((sec, secIdx) => {
       const pillarMeta = sectionToPillar.get(sec.sectionId);
       const fallbackMatch = /^P(\d+)\s+/.exec(sectionManualLabel(sec.sectionId, secIdx));
@@ -583,6 +659,10 @@ function ReportsPageContent() {
       .sort((a, b) => a.pillarCode.localeCompare(b.pillarCode, undefined, { numeric: true }))
       .map((pillar) => {
         const pct = (v: number) => (pillar.total > 0 ? (v / pillar.total) * 100 : 0);
+        // OHI score is the weighted score where Strongly Agree is best.
+        // Mapping: SD=1, D=2, N=3, A=4, SA=5.
+        const weightedScore = pillar.SA * 5 + pillar.A * 4 + pillar.N * 3 + pillar.D * 2 + pillar.SD * 1;
+        const ohiScore = pillar.total > 0 ? (weightedScore / (pillar.total * 5)) * 100 : 0;
         return {
           pillarCode: pillar.pillarCode,
           pillarName: pillar.pillarName,
@@ -591,6 +671,7 @@ function ReportsPageContent() {
           N: Number(pct(pillar.N).toFixed(1)),
           A: Number(pct(pillar.A).toFixed(1)),
           SA: Number(pct(pillar.SA).toFixed(1)),
+          ohiScore: Number(ohiScore.toFixed(1)),
         };
       });
   }, [questionPillars, scopedSections, sectionManualLabel]);
@@ -625,11 +706,15 @@ function ReportsPageContent() {
   const activeListMeta = useMemo(() => {
     if (!companySummary || !activeUserList) return null;
     if (activeUserList === 'completed') {
+      const completedEmailsOnly = (companySummary.completedEmails ?? []).filter(isValidEmail);
+      const completedUsersOnly = (companySummary.completedUsers ?? [])
+        .map((u) => String(u ?? '').trim())
+        .filter(Boolean);
       const emails =
-        (companySummary.completedEmails?.length ?? 0) > 0
-          ? (companySummary.completedEmails ?? [])
-          : (companySummary.completedUsers?.length ?? 0) > 0
-            ? (companySummary.completedUsers ?? [])
+        completedEmailsOnly.length > 0
+          ? completedEmailsOnly
+          : completedUsersOnly.length > 0
+            ? completedUsersOnly
             : completedFallbackUsers;
       return {
         title: 'Completed User List',
@@ -725,7 +810,7 @@ function ReportsPageContent() {
           <p className="text-xs text-gray-500">Updating report…</p>
         )}
 
-        {/* Metric Cards */}
+        {/* Metric Cards
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
@@ -779,7 +864,7 @@ function ReportsPageContent() {
             </h3>
             <p className="text-xs text-gray-400 mt-1">Diagnostic entities</p>
           </div>
-        </div>
+        </div> */}
 
         <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
@@ -796,14 +881,17 @@ function ReportsPageContent() {
               return (
                 <div
                   key={band.label}
-                  className={`rounded-lg border p-3 ${
-                    isActive
-                      ? 'border-emerald-400 ring-2 ring-emerald-300 ring-offset-1'
-                      : 'border-gray-200'
-                  }`}
+                    className="rounded-lg border p-3 transition-colors"
+                    style={{
+                      borderColor: isActive ? band.color : '#E5E7EB', // gray-200
+                      backgroundColor: hexToRgba(band.color, isActive ? 0.12 : 0.06),
+                      boxShadow: isActive ? `0 0 0 2px ${hexToRgba(band.color, 0.28)}` : 'none',
+                    }}
                 >
                   <div className="h-2.5 rounded-full mb-2" style={{ backgroundColor: band.color }} />
-                  <p className="text-xs font-semibold text-gray-800">{band.label}</p>
+                    <p className="text-xs font-semibold" style={{ color: band.color }}>
+                      {band.label}
+                    </p>
                 </div>
               );
             })}
@@ -815,7 +903,11 @@ function ReportsPageContent() {
             <button
               type="button"
               disabled={!companySummary || loadingSummary || (companySummary.completedCount ?? 0) === 0}
-              onClick={() => setActiveUserList('completed')}
+              onClick={async () => {
+                if (!selectedCompany) return;
+                const summary = await fetchCompanySummary(selectedCompany);
+                if (summary && (summary.completedCount ?? 0) > 0) setActiveUserList('completed');
+              }}
               className="bg-white border border-emerald-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-emerald-300 transition-colors"
             >
               <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">
@@ -830,8 +922,12 @@ function ReportsPageContent() {
             </button>
             <button
               type="button"
-              disabled={!companySummary || loadingSummary || (companySummary.pendingCount ?? 0) === 0}
-              onClick={() => setActiveUserList('pending')}
+              disabled={!selectedCompany || loadingSummary}
+              onClick={async () => {
+                if (!selectedCompany) return;
+                const summary = await fetchCompanySummary(selectedCompany);
+                if (summary) setActiveUserList('pending');
+              }}
               className="bg-white border border-amber-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-amber-300 transition-colors"
             >
               <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">
@@ -847,7 +943,11 @@ function ReportsPageContent() {
             <button
               type="button"
               disabled={!companySummary || loadingSummary || (companySummary.totalInvited ?? 0) === 0}
-              onClick={() => setActiveUserList('invited')}
+              onClick={async () => {
+                if (!selectedCompany) return;
+                const summary = await fetchCompanySummary(selectedCompany);
+                if (summary && (summary.totalInvited ?? 0) > 0) setActiveUserList('invited');
+              }}
               className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm text-left disabled:opacity-70 disabled:cursor-not-allowed hover:border-gray-300 transition-colors"
             >
               <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1">
@@ -1012,7 +1112,38 @@ function ReportsPageContent() {
                       formatter={(v) => `${Number(v ?? 0).toFixed(1)}%`}
                       labelFormatter={(value) => `${String(value)}`}
                     />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Legend
+                      content={() => {
+                        const len = pillarLikertPillarSummary.length || 1;
+                        const avg = (key: 'SD' | 'D' | 'N' | 'A' | 'SA') =>
+                          pillarLikertPillarSummary.reduce((sum, row) => sum + (row as any)[key], 0) / len;
+
+                        const items: Array<{ label: string; value: number }> = [
+                          { label: 'Strongly Disagree', value: avg('SD') },
+                          { label: 'Disagree', value: avg('D') },
+                          { label: 'Neutral', value: avg('N') },
+                          { label: 'Agree', value: avg('A') },
+                          { label: 'Strongly Agree', value: avg('SA') },
+                        ];
+
+                        return (
+                          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 px-2">
+                            {items.map((it) => (
+                              <div key={it.label} className="flex items-center gap-2">
+                                <span
+                                  aria-hidden="true"
+                                  className="inline-block h-3 w-3 rounded-sm"
+                                  style={{ backgroundColor: getOriColorByPercentage(it.value) }}
+                                />
+                                <p className="text-[10px] font-semibold text-gray-700">
+                                  {it.label} ({it.value.toFixed(1)}%)
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }}
+                    />
                     <Bar dataKey="SD" name="Strongly Disagree" fill={LIKERT_CHART_COLORS.SD}>
                       {pillarLikertPillarSummary.map((entry, idx) => (
                         <Cell key={`sd-${entry.pillarCode}-${idx}`} fill={getOriColorByPercentage(entry.SD)} />
@@ -1104,7 +1235,7 @@ function ReportsPageContent() {
                 <p className="text-sm text-gray-500">Loading completed users...</p>
               ) : activeListMeta.emails.length === 0 ? (
                 <p className="text-sm text-gray-500">
-                  {activeListMeta.emptyMessage} Count data exists, but individual email rows were not returned.
+                  {activeListMeta.emptyMessage} Count data exists, but individual user rows were not returned.
                 </p>
               ) : (
                 <div className="max-h-80 overflow-y-auto rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-800">

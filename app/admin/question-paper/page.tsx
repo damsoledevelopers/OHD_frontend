@@ -193,18 +193,8 @@ export default function QuestionPaperPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-start gap-4 min-w-0">
-            <Image
-              src="/ohdlogo.png"
-              alt="OHD Logo"
-              width={48}
-              height={48}
-              className="w-12 h-12 object-contain rounded-lg border border-gray-200 bg-white shrink-0"
-            />
             <div className="min-w-0">
               <h1 className="text-2xl font-bold text-gray-900">Question Paper Builder</h1>
-              <p className="text-sm text-gray-500 mt-1">
-                Manage pillars first, then drill into sections and questions on separate pages.
-              </p>
             </div>
           </div>
           <button

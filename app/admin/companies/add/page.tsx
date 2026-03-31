@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { UploadCloud, Building2, Mail, Briefcase, Users, User, Phone } from 'lucide-react';
 import DepartmentNameModal from '@/components/DepartmentNameModal';
+import DepartmentPickerModal from '@/components/DepartmentPickerModal';
+import { useDashboardDepartments } from '@/lib/useDashboardDepartments';
 
 export default function AddCompanyPage() {
     const router = useRouter();
@@ -19,7 +21,9 @@ export default function AddCompanyPage() {
     const [employeeCount, setEmployeeCount] = useState<number | ''>('');
     const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
     const [departmentModalOpen, setDepartmentModalOpen] = useState(false);
+    const [departmentPickerOpen, setDepartmentPickerOpen] = useState(false);
     const [creating, setCreating] = useState(false);
+    const { departments: departmentsFromDashboard } = useDashboardDepartments();
 
     // File upload state (employee list for surveys)
     const [fileName, setFileName] = useState<string>('');
@@ -97,6 +101,14 @@ export default function AddCompanyPage() {
 
     const addDepartment = () => setDepartmentModalOpen(true);
 
+    const togglePickerDepartment = (dept: string) => {
+      setSelectedDepartments((prev) =>
+        prev.some((d) => d.toLowerCase() === dept.toLowerCase())
+          ? prev.filter((d) => d.toLowerCase() !== dept.toLowerCase())
+          : [...prev, dept],
+      );
+    };
+
     const confirmDepartment = (normalized: string) => {
       setSelectedDepartments((prev) =>
         prev.includes(normalized) ? prev : [...prev, normalized],
@@ -115,6 +127,14 @@ export default function AddCompanyPage() {
         onConfirm={confirmDepartment}
         title="Add department"
         label="Enter department name"
+      />
+      <DepartmentPickerModal
+        open={departmentPickerOpen}
+        onClose={() => setDepartmentPickerOpen(false)}
+        departments={departmentsFromDashboard}
+        selected={selectedDepartments}
+        onToggle={togglePickerDepartment}
+        title="Allowed departments"
       />
       <div className="max-w-3xl mx-auto space-y-6">
         <div>
@@ -177,35 +197,43 @@ export default function AddCompanyPage() {
                   />
                 </div>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <label className="text-sm font-semibold text-gray-700">Allowed Departments</label>
-                <div className="space-y-2">
-                  <div className="flex flex-wrap gap-2">
-                    {selectedDepartments.map((dept) => (
-                      <span
-                        key={dept}
-                        className="inline-flex items-center gap-2 rounded-full bg-emerald-700 px-3 py-1 text-xs font-semibold text-white"
-                      >
-                        {dept}
-                        <button
-                          type="button"
-                          onClick={() => removeDepartment(dept)}
-                          className="text-white/90 hover:text-white"
-                          aria-label={`Remove ${dept}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-
+                <p className="text-[11px] text-gray-400">
+                  Choose from the list managed on the Dashboard (upload / add departments there). You can also add a
+                  custom name.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={addDepartment}
-                    className="inline-flex items-center justify-center rounded-lg border border-primary-500 bg-primary-50 px-4 py-2 text-sm font-semibold text-primary-700 hover:bg-primary-100"
+                    onClick={() => setDepartmentPickerOpen(true)}
+                    className="inline-flex items-center justify-center rounded-xl border border-primary-500 bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-700 hover:bg-primary-100"
                   >
-                    + Add department
+                    Allowed departments
+                    {selectedDepartments.length > 0 ? (
+                      <span className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary-600 px-1.5 text-[11px] text-white">
+                        {selectedDepartments.length}
+                      </span>
+                    ) : null}
                   </button>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {selectedDepartments.map((dept) => (
+                    <span
+                      key={dept}
+                      className="inline-flex items-center gap-2 rounded-full bg-emerald-700 px-3 py-1 text-xs font-semibold text-white"
+                    >
+                      {dept}
+                      <button
+                        type="button"
+                        onClick={() => removeDepartment(dept)}
+                        className="text-white/90 hover:text-white"
+                        aria-label={`Remove ${dept}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
                 </div>
               </div>
               <div className="space-y-2">

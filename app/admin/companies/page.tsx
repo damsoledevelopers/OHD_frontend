@@ -8,6 +8,8 @@ import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { Edit, Eye, Trash2, Plus, X, Mail, BarChart3, Search, Send } from 'lucide-react';
 import DepartmentNameModal from '@/components/DepartmentNameModal';
+import DepartmentPickerModal from '@/components/DepartmentPickerModal';
+import { useDashboardDepartments } from '@/lib/useDashboardDepartments';
 
 interface Company {
   _id: string;
@@ -54,21 +56,24 @@ function getPublicAppBaseUrlFromEnv(): string {
   return (process.env.NEXT_PUBLIC_PUBLIC_APP_BASE_URL || '').trim().replace(/\/$/, '');
 }
 
-/** Participant survey entry is always `/survey/start` on the public app host. */
-function buildPublicSurveyStartUrl(publicAppBaseUrl: string, companyId: string): string {
+/** Build participant exam URL from participant app origin. */
+function buildPublicExamUrl(publicAppBaseUrl: string, companyId: string): string {
   const trimmed = publicAppBaseUrl.trim().replace(/\/$/, '');
   if (!trimmed) return '';
+
+  // Always force participant route. Never use admin/question-paper for user invites.
+  const normalized = `${trimmed}/survey`;
   try {
-    const withProto = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
-      ? trimmed
-      : `http://${trimmed}`;
+    const withProto = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(normalized)
+      ? normalized
+      : `http://${normalized}`;
     const url = new URL(withProto);
-    url.pathname = '/survey/start';
     url.search = '';
     url.searchParams.set('companyId', companyId);
     return url.toString();
   } catch {
-    return `${trimmed}/survey/start?companyId=${encodeURIComponent(companyId)}`;
+    const joiner = normalized.includes('?') ? '&' : '?';
+    return `${normalized}${joiner}companyId=${encodeURIComponent(companyId)}`;
   }
 }
 
@@ -104,6 +109,8 @@ export default function CompaniesPage() {
   const [editExcelFile, setEditExcelFile] = useState<File | null>(null);
   const [editDepartments, setEditDepartments] = useState<string[]>([]);
   const [departmentModalOpen, setDepartmentModalOpen] = useState(false);
+  const [departmentPickerOpen, setDepartmentPickerOpen] = useState(false);
+  const { departments: departmentsFromDashboard } = useDashboardDepartments();
 
   // Email modal state
   const [mailSubject, setMailSubject] = useState('');
@@ -181,7 +188,6 @@ export default function CompaniesPage() {
   const endIndex = Math.min(filteredCompanies.length, currentPage * pageSize);
 
   // Backend PUBLIC_APP_BASE_URL → /api/public/config; NEXT_PUBLIC_PUBLIC_APP_BASE_URL is fallback.
-  // PUBLIC_SURVEY_BASE_URL is the question-paper URL only (see questionPaperBaseUrl).
   useEffect(() => {
     let cancelled = false;
 
@@ -200,16 +206,13 @@ export default function CompaniesPage() {
       try {
         setLoadingPublicAppBaseUrl(true);
         const res = await publicAPI.getConfig();
-        const baseUrl =
-          res.data?.publicAppBaseUrl ?? res.data?.surveyBaseUrl ?? null;
-
+        const baseUrl = res.data?.publicAppBaseUrl ?? res.data?.surveyBaseUrl ?? null;
         if (cancelled) return;
         if (baseUrl) {
           setPublicAppBaseUrl(baseUrl);
-          return;
+        } else {
+          applyFallbackBase();
         }
-
-        applyFallbackBase();
       } catch (e) {
         console.error('Failed to load public app base URL', e);
         applyFallbackBase();
@@ -290,6 +293,8 @@ export default function CompaniesPage() {
 
   const openModal = (type: ModalType, companyId: string) => {
     setSelectedCompanyId(companyId);
+    setDepartmentModalOpen(false);
+    setDepartmentPickerOpen(false);
     if (type === 'edit') {
       const company = companies.find((c) => c._id === companyId);
       if (company) {
@@ -323,6 +328,7 @@ export default function CompaniesPage() {
     setActiveModal(null);
     setSelectedCompanyId(null);
     setDepartmentModalOpen(false);
+    setDepartmentPickerOpen(false);
     setCompanyLinkSubject('');
     setCompanyLinkNotes('');
     setCompanyLinkRecipient('');
@@ -337,7 +343,17 @@ export default function CompaniesPage() {
 
   const confirmEditDepartment = (normalized: string) => {
     setEditDepartments((prev) =>
-      prev.includes(normalized) ? prev : [...prev, normalized]
+      prev.some((d) => d.toLowerCase() === normalized.toLowerCase())
+        ? prev
+        : [...prev, normalized]
+    );
+  };
+
+  const toggleEditPickerDepartment = (dept: string) => {
+    setEditDepartments((prev) =>
+      prev.some((d) => d.toLowerCase() === dept.toLowerCase())
+        ? prev.filter((d) => d.toLowerCase() !== dept.toLowerCase())
+        : [...prev, dept]
     );
   };
 
@@ -483,7 +499,7 @@ export default function CompaniesPage() {
     if (!selectedCompanyId) return;
     if (!publicAppBaseUrl) {
       toast.error(
-        'Survey link is not configured. Set `PUBLIC_APP_BASE_URL` in Backend `.env` or `NEXT_PUBLIC_PUBLIC_APP_BASE_URL` in Frontend `.env` (participant app origin; survey path is /survey/start).'
+        'Survey link is not configured. Set `PUBLIC_APP_BASE_URL` in Backend `.env` or `NEXT_PUBLIC_PUBLIC_APP_BASE_URL` in Frontend `.env` (participant app origin; survey path is /survey).'
       );
       return;
     }
@@ -503,7 +519,7 @@ export default function CompaniesPage() {
       return;
     }
 
-    const surveyLink = buildPublicSurveyStartUrl(publicAppBaseUrl, selectedCompanyId);
+    const surveyLink = buildPublicExamUrl(publicAppBaseUrl, selectedCompanyId);
     const personalizedSurveyLink = (() => {
       try {
         const url = new URL(surveyLink);
@@ -547,6 +563,14 @@ export default function CompaniesPage() {
         onConfirm={confirmEditDepartment}
         title="Add department"
         label="Enter department name"
+      />
+      <DepartmentPickerModal
+        open={departmentPickerOpen}
+        onClose={() => setDepartmentPickerOpen(false)}
+        departments={departmentsFromDashboard}
+        selected={editDepartments}
+        onToggle={toggleEditPickerDepartment}
+        title="Allowed departments"
       />
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1029,8 +1053,23 @@ export default function CompaniesPage() {
                     Allowed departments
                   </label>
                   <p className="text-[11px] text-gray-400">
-                    Shown to participants when they start the survey.
+                    Choose from the list managed on the Dashboard (upload / add departments there). You can also add a
+                    custom name.
                   </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDepartmentPickerOpen(true)}
+                      className="inline-flex items-center justify-center rounded-xl border border-primary-500 bg-primary-50 px-4 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-100"
+                    >
+                      Allowed departments
+                      {editDepartments.length > 0 ? (
+                        <span className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary-600 px-1.5 text-[11px] text-white">
+                          {editDepartments.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     {editDepartments.map((dept) => (
                       <span
@@ -1049,13 +1088,6 @@ export default function CompaniesPage() {
                       </span>
                     ))}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setDepartmentModalOpen(true)}
-                    className="inline-flex items-center justify-center rounded-xl border border-primary-500 bg-primary-50 px-4 py-2 text-xs font-semibold text-primary-700 hover:bg-primary-100"
-                  >
-                    + Add department
-                  </button>
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <label className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider">
@@ -1235,7 +1267,7 @@ export default function CompaniesPage() {
                     Add email
                   </button>
                 </div>
-                <div className="max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                <div className="max-h-52 overflow-y-auto scrollbar-none rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                   {loadingRecipients ? (
                     <p className="text-xs text-gray-600">Loading recipients from Excel…</p>
                   ) : (
