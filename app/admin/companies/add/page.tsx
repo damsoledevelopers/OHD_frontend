@@ -20,7 +20,6 @@ export default function AddCompanyPage() {
     const [industry, setIndustry] = useState('');
     const [employeeCount, setEmployeeCount] = useState<number | ''>('');
     const [selectedDepartments, setSelectedDepartments] = useState<string[]>([]);
-    const [departmentModalOpen, setDepartmentModalOpen] = useState(false);
     const [departmentPickerOpen, setDepartmentPickerOpen] = useState(false);
     const [creating, setCreating] = useState(false);
     const { departments: departmentsFromDashboard } = useDashboardDepartments();
@@ -43,8 +42,8 @@ export default function AddCompanyPage() {
 
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!name || !email) {
-            toast.error('Name and email are required');
+        if (!name || !email || !industry || !employeeCount || !contactPerson || !phone || !file) {
+            toast.error('Please fill in all fields and upload a file');
             return;
         }
 
@@ -99,19 +98,11 @@ export default function AddCompanyPage() {
         }
       };
 
-    const addDepartment = () => setDepartmentModalOpen(true);
-
     const togglePickerDepartment = (dept: string) => {
       setSelectedDepartments((prev) =>
         prev.some((d) => d.toLowerCase() === dept.toLowerCase())
           ? prev.filter((d) => d.toLowerCase() !== dept.toLowerCase())
           : [...prev, dept],
-      );
-    };
-
-    const confirmDepartment = (normalized: string) => {
-      setSelectedDepartments((prev) =>
-        prev.includes(normalized) ? prev : [...prev, normalized],
       );
     };
 
@@ -121,13 +112,6 @@ export default function AddCompanyPage() {
 
     return (
     <AdminLayout>
-      <DepartmentNameModal
-        open={departmentModalOpen}
-        onClose={() => setDepartmentModalOpen(false)}
-        onConfirm={confirmDepartment}
-        title="Add department"
-        label="Enter department name"
-      />
       <DepartmentPickerModal
         open={departmentPickerOpen}
         onClose={() => setDepartmentPickerOpen(false)}
@@ -181,6 +165,7 @@ export default function AddCompanyPage() {
                     onChange={(e) => setIndustry(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     placeholder="e.g. Technology"
+                    required
                   />
                 </div>
               </div>
@@ -194,14 +179,14 @@ export default function AddCompanyPage() {
                     onChange={(e) => setEmployeeCount(e.target.value === '' ? '' : Number(e.target.value))}
                     className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     placeholder="Number of employees"
+                    required
                   />
                 </div>
               </div>
               <div className="space-y-2 md:col-span-2">
                 <label className="text-sm font-semibold text-gray-700">Allowed Departments</label>
                 <p className="text-[11px] text-gray-400">
-                  Choose from the list managed on the Dashboard (upload / add departments there). You can also add a
-                  custom name.
+                  Choose from the list managed on the Dashboard (upload / add departments there).
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -215,13 +200,6 @@ export default function AddCompanyPage() {
                         {selectedDepartments.length}
                       </span>
                     ) : null}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={addDepartment}
-                    className="inline-flex items-center justify-center rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-                  >
-                    Add custom name
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -252,6 +230,7 @@ export default function AddCompanyPage() {
                     onChange={(e) => setContactPerson(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     placeholder="Name of contact person"
+                    required
                   />
                 </div>
               </div>
@@ -265,6 +244,7 @@ export default function AddCompanyPage() {
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full rounded-lg border border-gray-300 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                     placeholder="+91 98765 43210"
+                    required
                   />
                 </div>
               </div>
@@ -276,7 +256,7 @@ export default function AddCompanyPage() {
                 onClick={() => fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${fileName ? 'border-primary-500 bg-primary-50' : 'border-gray-300 hover:border-primary-400'}`}
               >
-                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx" />
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx" required />
                 <div className="flex flex-col items-center">
                   <UploadCloud className={`w-8 h-8 mb-2 ${fileName ? 'text-primary-600' : 'text-gray-400'}`} />
                   <p className="text-sm font-medium text-gray-700">{fileName ? fileName : 'Click to upload files'}</p>
