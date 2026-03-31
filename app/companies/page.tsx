@@ -33,8 +33,8 @@ export default function CompanyDetailsFormPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!companyName) {
-      toast.error('Company name is required');
+    if (!companyName || !email || !contactPerson || !phone || !industry || !employeeCount || selectedDepartments.length === 0 || !excelInputRef.current?.files?.[0]) {
+      toast.error('Please fill in all fields and upload an excel file');
       return;
     }
 
@@ -173,7 +173,7 @@ export default function CompanyDetailsFormPage() {
 
                 <div>
                   <label htmlFor="contactPerson" className={labelClass}>
-                    Contact person
+                    Contact person <span className="font-normal text-red-500">*</span>
                   </label>
                   <input
                     id="contactPerson"
@@ -181,12 +181,13 @@ export default function CompanyDetailsFormPage() {
                     onChange={(e) => setContactPerson(e.target.value)}
                     className={fieldClass}
                     placeholder="Primary contact name"
+                    required
                   />
                 </div>
 
                 <div>
                   <label htmlFor="phone" className={labelClass}>
-                    Phone
+                    Phone <span className="font-normal text-red-500">*</span>
                   </label>
                   <input
                     id="phone"
@@ -195,12 +196,13 @@ export default function CompanyDetailsFormPage() {
                     onChange={(e) => setPhone(e.target.value)}
                     className={fieldClass}
                     placeholder="+91 98765 43210"
+                    required
                   />
                 </div>
 
                 <div>
                   <label htmlFor="industry" className={labelClass}>
-                    Industry
+                    Industry <span className="font-normal text-red-500">*</span>
                   </label>
                   <input
                     id="industry"
@@ -208,12 +210,13 @@ export default function CompanyDetailsFormPage() {
                     onChange={(e) => setIndustry(e.target.value)}
                     className={fieldClass}
                     placeholder="e.g. Technology"
+                    required
                   />
                 </div>
 
                 <div>
                   <label htmlFor="employeeCount" className={labelClass}>
-                    Employees
+                    Employees <span className="font-normal text-red-500">*</span>
                   </label>
                   <input
                     id="employeeCount"
@@ -225,13 +228,14 @@ export default function CompanyDetailsFormPage() {
                     }
                     className={fieldClass}
                     placeholder="Approx. headcount"
+                    required
                   />
                 </div>
 
                 <div className="border-t border-slate-100 pt-4 md:col-span-2">
-                  <span className={labelClass}>Allowed departments</span>
+                  <span className={labelClass}>Allowed departments <span className="font-normal text-red-500">*</span></span>
                   <p className="mb-1.5 text-[10px] leading-snug text-slate-400">
-                    Optional — choose departments from your organization list (managed in the admin dashboard).
+                    Choose departments from your organization list (managed in the admin dashboard).
                   </p>
                   <div className="flex min-h-[2rem] flex-wrap items-center gap-2">
                     <button
@@ -269,10 +273,7 @@ export default function CompanyDetailsFormPage() {
 
                 <div className="md:col-span-2">
                   <span className={labelClass}>
-                    Excel{' '}
-                    <span className="font-normal normal-case tracking-normal text-slate-400">
-                      (optional)
-                    </span>
+                    Excel <span className="font-normal text-red-500">*</span>
                   </span>
                   <button
                     type="button"
@@ -289,6 +290,7 @@ export default function CompanyDetailsFormPage() {
                       accept=".xls,.xlsx"
                       onChange={handleExcelChange}
                       className="hidden"
+                      required
                     />
                     <UploadCloud className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">
